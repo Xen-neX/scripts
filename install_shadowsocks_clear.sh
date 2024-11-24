@@ -95,7 +95,7 @@ main() {
     fi
 
     for funcname in \"\$@\"; do
-        if [ \"\$(type -t \$funcname)\" != \"function\" ]; then
+        if [ \"\$(type -t \$funcname)\" != 'function' ]; then
             echo \"'\$funcname' not a shell function\"
             return 1
         fi
@@ -138,4 +138,3 @@ sudo systemctl start shadowsocks.service
 # Проверка статуса
 echo "Сервис shadowsocks.service запущен. Проверяю статус..."
 sudo systemctl status shadowsocks.service
-
