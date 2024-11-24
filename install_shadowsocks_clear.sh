@@ -75,19 +75,19 @@ restart() {
 
 main() {
     if [ $# -eq 0 ]; then
-        echo "usage: $0 start|stop|restart ..."
+        echo "usage: $0 start|stop|restart"
         return 1
     fi
 
     for funcname in "$@"; do
-        if declare -F "$funcname" &>/dev/null; then
+        # Проверяем, что функция существует
+        if declare -f "$funcname" > /dev/null; then
             $funcname
         else
-            echo "'$funcname' not a shell function"
+            echo "Ошибка: '$funcname' не является shell-функцией"
             return 1
         fi
     done
-    return 0
 }
 
 main "$@"
