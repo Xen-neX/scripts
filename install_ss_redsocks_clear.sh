@@ -61,9 +61,11 @@ dnstc {
 EOF
 
 # Создание скрипта для запуска Shadowsocks и Redsocks
-echo "Создаю скрипт для запуска Shadowsocks и Redsocks..."
+echo "Создаю скрипт для управления Shadowsocks и Redsocks..."
 sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
+
+CONFIG_FILE="/etc/ss_redsocks.env"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -83,6 +85,21 @@ start_redsocks() {
 stop_redsocks() {
     echo "Останавливаю Redsocks..."
     pkill -f redsocks
+
+    echo "Очищаю iptables..."
+    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS &>/dev/null
+    sudo iptables -t nat -D OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN &>/dev/null
+    sudo iptables -t nat -D OUTPUT -p tcp -d \$(hostname -I | awk '{print \$1}') -j RETURN &>/dev/null
+
+    if [ -n "\$SERVER_IP" ] && [ -n "\$SERVER_PORT" ]; then
+        sudo iptables -t nat -D OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN &>/dev/null
+    fi
+
+    # Удаление всех правил из цепочки REDSOCKS
+    sudo iptables -t nat -F REDSOCKS &>/dev/null
+
+    # Удаление цепочки REDSOCKS
+    sudo iptables -t nat -X REDSOCKS &>/dev/null
 }
 
 configure_iptables() {
@@ -93,13 +110,20 @@ configure_iptables() {
     sudo iptables -t nat -N REDSOCKS
     sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
     sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
     sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
 start() {
+    echo "Сохраняю параметры в конфигурационный файл..."
+    sudo tee \$CONFIG_FILE > /dev/null <<EOL
+SERVER_IP=$SERVER_IP
+SERVER_PORT=$SERVER_PORT
+SERVER_PASSWORD=$SERVER_PASSWORD
+EOL
+
     start_shadowsocks
     start_redsocks
     configure_iptables
@@ -107,9 +131,16 @@ start() {
 }
 
 stop() {
+    echo "Загружаю параметры из конфигурационного файла..."
+    if [ -f \$CONFIG_FILE ]; then
+        source \$CONFIG_FILE
+    else
+        echo "Ошибка: конфигурационный файл \$CONFIG_FILE не найден!"
+        exit 1
+    fi
+
     stop_shadowsocks
     stop_redsocks
-    sudo iptables -t nat -F
     echo "Все сервисы остановлены."
 }
 
@@ -168,4 +199,3 @@ sudo systemctl start ss_redsocks.service
 
 # Проверка статуса
 sudo systemctl status ss_redsocks.service
-
