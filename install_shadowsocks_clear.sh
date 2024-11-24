@@ -1,136 +1,210 @@
 #!/bin/bash
 
-# Установка shadowsocks-libev
-echo "Устанавливаю shadowsocks-libev..."
+# Путь к конфигурационному файлу
+CONFIG_FILE="/etc/ss_redsocks.conf"
+
+# Установка необходимых пакетов
+echo "Устанавливаю необходимые пакеты..."
 sudo apt-get update
-sudo apt-get install -y shadowsocks-libev
+sudo apt-get install -y shadowsocks-libev redsocks
 
-# Запрос параметров у пользователя
-read -p "Введите IP-адрес сервера: " SERVER_IP
-read -p "Введите порт сервера: " SERVER_PORT
-read -p "Введите пароль: " SERVER_PASSWORD
+# Запрос параметров только если конфигурационный файл отсутствует
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
+    read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
+    read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
-# Создание скрипта shadowsocks.sh
-echo "Создаю скрипт shadowsocks.sh..."
-sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+    # Сохранение параметров в конфигурационный файл
+    echo "Сохраняю конфигурацию..."
+    sudo tee "$CONFIG_FILE" > /dev/null <<EOF
+SERVER_IP="$SERVER_IP"
+SERVER_PORT="$SERVER_PORT"
+SERVER_PASSWORD="$SERVER_PASSWORD"
+EOF
+else
+    echo "Загружаю конфигурацию из $CONFIG_FILE..."
+    source "$CONFIG_FILE"
+fi
+
+# Создание конфигурационного файла Shadowsocks
+echo "Создаю конфигурацию Shadowsocks..."
+sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+{
+    "server": "$SERVER_IP",
+    "server_port": $SERVER_PORT,
+    "local_port": 1080,
+    "password": "$SERVER_PASSWORD",
+    "method": "chacha20-ietf-poly1305",
+    "mode": "tcp_and_udp",
+    "fast_open": true
+}
+EOF
+
+# Создание конфигурационного файла Redsocks
+echo "Создаю конфигурацию Redsocks..."
+sudo tee /etc/redsocks.conf > /dev/null <<EOF
+base {
+    log = "file:/var/log/redsocks.log";
+    daemon = on;
+    user = redsocks;
+    group = redsocks;
+    redirector = iptables;
+}
+
+redsocks {
+    local_ip = 127.0.0.1;
+    local_port = 12345;
+    ip = 127.0.0.1;
+    port = 1080;
+    type = socks5;
+}
+
+redudp {
+    local_ip = 127.0.0.1;
+    local_port = 10053;
+    ip = 127.0.0.1;
+    port = 1080;
+    dest_ip = 192.0.2.2;
+    dest_port = 53;
+    udp_timeout = 30;
+    udp_timeout_stream = 180;
+}
+
+dnstc {
+    local_ip = 127.0.0.1;
+    local_port = 5300;
+}
+EOF
+
+# Создание скрипта для управления Shadowsocks и Redsocks
+echo "Создаю скрипт для управления Shadowsocks и Redsocks..."
+sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
-start_ssredir() {
-    echo "Запускаю ss-redir..."
-    (ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
+CONFIG_FILE="/etc/ss_redsocks.conf"
+
+# Загрузка конфигурации
+if [[ -f "\$CONFIG_FILE" ]]; then
+    source "\$CONFIG_FILE"
+else
+    echo "Ошибка: Конфигурационный файл \$CONFIG_FILE не найден."
+    exit 1
+fi
+
+start_shadowsocks() {
+    echo "Запускаю Shadowsocks..."
+    nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &
 }
 
-stop_ssredir() {
-    echo "Останавливаю ss-redir..."
-    kill -9 \$(pidof ss-redir) &>/dev/null
+stop_shadowsocks() {
+    echo "Останавливаю Shadowsocks..."
+    pkill -f ss-local
 }
 
-start_iptables() {
+start_redsocks() {
+    echo "Запускаю Redsocks..."
+    # Проверка и освобождение порта
+    if sudo netstat -tuln | grep -q ":12345"; then
+        echo "Порт 12345 уже занят, освобождаю..."
+        sudo pkill -f redsocks
+        sleep 1
+    fi
+    nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &
+}
+
+stop_redsocks() {
+    echo "Останавливаю Redsocks..."
+    pkill -f redsocks
+    sleep 1
+}
+
+configure_iptables() {
     echo "Настраиваю iptables..."
-    iptables -t mangle -N SSREDIR
-    iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
-    iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
-    iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
-    iptables -t mangle -A SSREDIR -p udp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
-    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
-    iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
-    iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
-    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
-    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+    # Удаляем предыдущие правила
+    sudo iptables -t nat -F
+    sudo iptables -t nat -X REDSOCKS
+
+    # Создаём цепочку REDSOCKS
+    sudo iptables -t nat -N REDSOCKS
+
+    # Исключения для локального трафика
+    sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d \$(hostname -I | awk '{print \$1}') -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+
+    # Перенаправление HTTP и HTTPS
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+
+    # Общий трафик через REDSOCKS
+    sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
-stop_iptables() {
-    echo "Очищаю iptables..."
-    iptables -t mangle -F SSREDIR &>/dev/null
-    iptables -t mangle -X SSREDIR &>/dev/null
-}
-
-start_iproute2() {
-    echo "Настраиваю iproute2..."
-    ip route add local default dev lo table 100
-    ip rule add fwmark 0x2333 table 100
-}
-
-stop_iproute2() {
-    echo "Очищаю iproute2..."
-    ip rule del table 100 &>/dev/null
-    ip route flush table 100 &>/dev/null
-}
-
-start_resolvconf() {
-    echo "Настраиваю resolv.conf..."
-    echo "nameserver 1.1.1.1" >/etc/resolv.conf
-}
-
-stop_resolvconf() {
-    echo "Восстанавливаю resolv.conf..."
-    echo "nameserver 114.114.114.114" >/etc/resolv.conf
+clear_iptables() {
+    echo "Сбрасываю правила iptables..."
+    sudo iptables -t nat -F
+    sudo iptables -t nat -X REDSOCKS
 }
 
 start() {
-    echo "Запуск процесса..."
-    start_ssredir
-    start_iptables
-    start_iproute2
-    start_resolvconf
-    echo "Процесс запущен."
+    echo "Запуск Shadowsocks и Redsocks..."
+    start_shadowsocks
+    start_redsocks
+    configure_iptables
+    echo "Перезагружаю Redsocks для стабильной работы..."
+    stop_redsocks
+    start_redsocks
+    echo "Все сервисы запущены."
 }
 
 stop() {
-    echo "Остановка процесса..."
-    stop_resolvconf
-    stop_iproute2
-    stop_iptables
-    stop_ssredir
-    echo "Процесс остановлен."
+    echo "Остановка всех сервисов..."
+    stop_redsocks
+    stop_shadowsocks
+    clear_iptables
+    echo "Все сервисы остановлены."
 }
 
 restart() {
-    echo "Перезапуск процесса..."
     stop
     sleep 1
     start
 }
 
 main() {
-    echo "Переданы аргументы: \$@"
-    if [ \$# -eq 0 ]; then
-        echo "usage: \$0 start|stop|restart ..."
-        exit 1
-    fi
-
-    for funcname in "\$@"; do
-        if declare -F "\$funcname" > /dev/null; then
-            echo "Выполняется функция: \$funcname"
-            \$funcname
-        else
-            echo "Ошибка: '\$funcname' не является shell-функцией"
+    case "\$1" in
+        start)
+            start
+            ;;
+        stop)
+            stop
+            ;;
+        restart)
+            restart
+            ;;
+        *)
+            echo "Использование: \$0 {start|stop|restart}"
             exit 1
-        fi
-    done
+            ;;
+    esac
 }
 
 main "\$@"
 EOF
 
 # Делаем скрипт исполняемым
-sudo chmod +x /usr/local/bin/shadowsocks.sh
+sudo chmod +x /usr/local/bin/ss_redsocks.sh
 
 # Создание systemd-сервиса
-echo "Создаю systemd-сервис для shadowsocks.sh..."
-sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
+echo "Создаю systemd-сервис..."
+sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
-Description=Shadowsocks Custom Script
+Description=Shadowsocks + Redsocks Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/shadowsocks.sh start
-ExecStop=/usr/local/bin/shadowsocks.sh stop
+ExecStart=/usr/local/bin/ss_redsocks.sh start
+ExecStop=/usr/local/bin/ss_redsocks.sh stop
 Restart=on-failure
 RemainAfterExit=yes
 
@@ -138,12 +212,11 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-# Активируем и запускаем сервис
-echo "Активирую и запускаю сервис shadowsocks.service..."
+# Перезагрузка systemd, активация и запуск сервиса
+echo "Активирую и запускаю сервис ss_redsocks..."
 sudo systemctl daemon-reload
-sudo systemctl enable shadowsocks.service
-sudo systemctl start shadowsocks.service
+sudo systemctl enable ss_redsocks.service
+sudo systemctl start ss_redsocks.service
 
 # Проверка статуса
-echo "Сервис shadowsocks.service запущен. Проверяю статус..."
-sudo systemctl status shadowsocks.service
+sudo systemctl status ss_redsocks.service
