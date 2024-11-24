@@ -60,7 +60,7 @@ dnstc {
 }
 EOF
 
-# Создание скрипта для запуска Shadowsocks и Redsocks
+# Создание скрипта для управления Shadowsocks и Redsocks
 echo "Создаю скрипт для управления Shadowsocks и Redsocks..."
 sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
