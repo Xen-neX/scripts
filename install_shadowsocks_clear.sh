@@ -101,7 +101,7 @@ main() {
     echo "Переданы аргументы: \$@"
     if [ \$# -eq 0 ]; then
         echo "usage: \$0 start|stop|restart ..."
-        return 1
+        exit 1
     fi
 
     for funcname in "\$@"; do
@@ -110,7 +110,7 @@ main() {
             \$funcname
         else
             echo "Ошибка: '\$funcname' не является shell-функцией"
-            return 1
+            exit 1
         fi
     done
 }
