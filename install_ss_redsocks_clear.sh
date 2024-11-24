@@ -1,41 +1,35 @@
 #!/bin/bash
 
-echo "Добро пожаловать в установщик Shadowsocks + Redsocks"
-echo "Введите параметры для настройки:"
+echo "Установка необходимых пакетов..."
+sudo apt-get update
+sudo apt-get install -y shadowsocks-libev redsocks iptables-persistent
 
-# Спрашиваем переменные у пользователя
-read -p "IP удалённого сервера Shadowsocks: " SERVER_IP
-read -p "Порт удалённого сервера Shadowsocks: " SERVER_PORT
-read -p "Пароль для подключения к Shadowsocks: " SERVER_PASSWORD
+echo "Введите настройки для Shadowsocks:"
+read -p "Введите IP-адрес прокси-сервера (SERVER_IP): " SERVER_IP
+read -p "Введите порт прокси-сервера (SERVER_PORT): " SERVER_PORT
+read -p "Введите пароль прокси-сервера (SERVER_PASSWORD): " SERVER_PASSWORD
 
-# Проверка root-прав
-if [ "$EUID" -ne 0 ]; then
-  echo "Пожалуйста, запустите скрипт с правами root."
-  exit 1
-fi
+echo "Введите настройки для Redsocks:"
+read -p "Введите локальный порт для Redsocks (REDSOCKS_PORT, обычно 12345): " REDSOCKS_PORT
 
-# Установка необходимых пакетов
-echo "Установка Shadowsocks и Redsocks..."
-apt update
-apt install -y shadowsocks-libev redsocks
-
-# Создание конфигурации Shadowsocks
 echo "Создание конфигурации для Shadowsocks..."
-cat > /etc/shadowsocks-libev/config.json <<EOF
+SHADOWSOCKS_CONFIG="/etc/shadowsocks-libev/config.json"
+cat <<EOF | sudo tee $SHADOWSOCKS_CONFIG
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
+    "local_address": "127.0.0.1",
     "local_port": 1080,
     "password": "$SERVER_PASSWORD",
+    "timeout": 300,
     "method": "chacha20-ietf-poly1305",
-    "fast_open": true,
-    "mode": "tcp_and_udp"
+    "fast_open": true
 }
 EOF
 
-# Создание конфигурации Redsocks
 echo "Создание конфигурации для Redsocks..."
-cat > /etc/redsocks.conf <<EOF
+REDSOCKS_CONFIG="/etc/redsocks.conf"
+cat <<EOF | sudo tee $REDSOCKS_CONFIG
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -46,7 +40,7 @@ base {
 
 redsocks {
     local_ip = 127.0.0.1;
-    local_port = 12345;
+    local_port = $REDSOCKS_PORT;
     ip = 127.0.0.1;
     port = 1080;
     type = socks5;
@@ -69,76 +63,94 @@ dnstc {
 }
 EOF
 
-# Создание скрипта управления ss_redsocks.sh
 echo "Создание скрипта управления ss_redsocks.sh..."
-cat > /usr/local/bin/ss_redsocks.sh <<'EOL'
+SS_REDSOCKS_SCRIPT="/usr/local/bin/ss_redsocks.sh"
+cat <<'EOF' | sudo tee $SS_REDSOCKS_SCRIPT
 #!/bin/bash
 
-SERVER_IP="$1"
-SERVER_PORT="$2"
+SHADOWSOCKS_CONFIG="/etc/shadowsocks-libev/config.json"
+REDSOCKS_CONFIG="/etc/redsocks.conf"
+SERVER_IP=$(jq -r .server $SHADOWSOCKS_CONFIG)
+SERVER_PORT=$(jq -r .server_port $SHADOWSOCKS_CONFIG)
+REDSOCKS_PORT=$(grep local_port $REDSOCKS_CONFIG | head -n 1 | awk '{print $3}' | tr -d ';')
+
+start_iptables() {
+    echo "Настройка iptables..."
+    sudo iptables -t nat -F REDSOCKS 2>/dev/null || sudo iptables -t nat -N REDSOCKS
+    sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d "$SERVER_IP" -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d "$SERVER_IP" --dport "$SERVER_PORT" -j RETURN
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports "$REDSOCKS_PORT"
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports "$REDSOCKS_PORT"
+    sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+}
+
+stop_iptables() {
+    echo "Очистка правил iptables..."
+    sudo iptables -t nat -F REDSOCKS
+    sudo iptables -t nat -X REDSOCKS
+}
 
 start() {
     echo "Запуск Shadowsocks и Redsocks..."
-    systemctl start shadowsocks-libev
-    systemctl start redsocks
-
-    echo "Настройка iptables..."
-    iptables -t nat -N REDSOCKS
-    iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    iptables -t nat -A OUTPUT -p tcp -d "$SERVER_IP" --dport "$SERVER_PORT" -j RETURN
-    iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
-    iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
-    iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+    sudo systemctl restart shadowsocks-libev
+    sudo systemctl restart redsocks
+    start_iptables
+    echo "Сервисы запущены."
 }
 
 stop() {
-    echo "Остановка Redsocks и Shadowsocks..."
-    iptables -t nat -F REDSOCKS
-    iptables -t nat -D OUTPUT -p tcp -j REDSOCKS
-    iptables -t nat -X REDSOCKS
-    systemctl stop redsocks
-    systemctl stop shadowsocks-libev
+    echo "Остановка Shadowsocks и Redsocks..."
+    sudo systemctl stop redsocks
+    sudo systemctl stop shadowsocks-libev
+    stop_iptables
+    echo "Сервисы остановлены."
 }
 
-case "$1" in
-    start)
-        start
-        ;;
-    stop)
-        stop
-        ;;
-    restart)
-        stop
-        start
-        ;;
-    *)
-        echo "Использование: $0 {start|stop|restart}"
-        exit 1
-        ;;
-esac
-EOL
-chmod +x /usr/local/bin/ss_redsocks.sh
+restart() {
+    stop
+    start
+}
 
-# Создание systemd-сервиса
-echo "Создание systemd-сервиса ss_redsocks.service..."
-cat > /etc/systemd/system/ss_redsocks.service <<EOF
+status() {
+    echo "Состояние сервисов:"
+    sudo systemctl status shadowsocks-libev
+    sudo systemctl status redsocks
+}
+
+main() {
+    case "$1" in
+        start) start ;;
+        stop) stop ;;
+        restart) restart ;;
+        status) status ;;
+        *) echo "Использование: $0 {start|stop|restart|status}" ;;
+    esac
+}
+
+main "$@"
+EOF
+sudo chmod +x $SS_REDSOCKS_SCRIPT
+
+echo "Создание systemd сервиса ss_redsocks.service..."
+SS_REDSOCKS_SERVICE="/etc/systemd/system/ss_redsocks.service"
+cat <<EOF | sudo tee $SS_REDSOCKS_SERVICE
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/ss_redsocks.sh start
-ExecStop=/usr/local/bin/ss_redsocks.sh stop
-ExecReload=/usr/local/bin/ss_redsocks.sh restart
+ExecStart=$SS_REDSOCKS_SCRIPT start
+ExecStop=$SS_REDSOCKS_SCRIPT stop
+ExecReload=$SS_REDSOCKS_SCRIPT restart
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Перезагрузка systemd и активация сервиса
-systemctl daemon-reload
-systemctl enable ss_redsocks
-systemctl start ss_redsocks
+sudo systemctl daemon-reload
+sudo systemctl enable ss_redsocks.service
+sudo systemctl start ss_redsocks.service
 
-echo "Установка завершена! Сервис ss_redsocks активирован."
+echo "Установка завершена. Используйте команды systemctl для управления сервисом ss_redsocks.service."
