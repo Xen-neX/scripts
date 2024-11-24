@@ -12,7 +12,7 @@ read -p "Введите пароль: " SERVER_PASSWORD
 
 # Создание скрипта shadowsocks.sh
 echo "Создаю скрипт shadowsocks.sh..."
-sudo bash -c "cat > /usr/local/bin/shadowsocks.sh <<EOF
+sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 start_ssredir() {
@@ -107,14 +107,14 @@ main() {
     return 0
 }
 main \"\$@\"
-EOF"
+EOF
 
 # Делаем скрипт исполняемым
 sudo chmod +x /usr/local/bin/shadowsocks.sh
 
 # Создание systemd-сервиса
 echo "Создаю systemd-сервис для shadowsocks.sh..."
-sudo bash -c "cat > /etc/systemd/system/shadowsocks.service <<EOF
+sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks Custom Script
 After=network.target
@@ -127,7 +127,7 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
-EOF"
+EOF
 
 # Активируем и запускаем сервис
 echo "Активирую и запускаю сервис shadowsocks.service..."
