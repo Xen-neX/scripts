@@ -65,8 +65,6 @@ echo "Создаю скрипт для управления Shadowsocks и Redso
 sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
-CONFIG_FILE="/etc/ss_redsocks.env"
-
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
     nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &
@@ -85,62 +83,52 @@ start_redsocks() {
 stop_redsocks() {
     echo "Останавливаю Redsocks..."
     pkill -f redsocks
-
-    echo "Очищаю iptables..."
-    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS &>/dev/null
-    sudo iptables -t nat -D OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN &>/dev/null
-    sudo iptables -t nat -D OUTPUT -p tcp -d \$(hostname -I | awk '{print \$1}') -j RETURN &>/dev/null
-
-    if [ -n "\$SERVER_IP" ] && [ -n "\$SERVER_PORT" ]; then
-        sudo iptables -t nat -D OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN &>/dev/null
-    fi
-
-    # Удаление всех правил из цепочки REDSOCKS
-    sudo iptables -t nat -F REDSOCKS &>/dev/null
-
-    # Удаление цепочки REDSOCKS
-    sudo iptables -t nat -X REDSOCKS &>/dev/null
 }
 
 configure_iptables() {
     echo "Настраиваю iptables..."
-    YOUR_SERVER_IP=\$(hostname -I | awk '{print \$1}')
-
+    # Удаляем предыдущие правила
     sudo iptables -t nat -F
+    sudo iptables -t nat -X REDSOCKS
+
+    # Создаём цепочку REDSOCKS
     sudo iptables -t nat -N REDSOCKS
+
+    # Исключения для локального трафика
     sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d $(hostname -I | awk '{print $1}') -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+
+    # Перенаправление HTTP и HTTPS
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+
+    # Общий трафик через REDSOCKS
     sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
-start() {
-    echo "Сохраняю параметры в конфигурационный файл..."
-    sudo tee \$CONFIG_FILE > /dev/null <<EOL
-SERVER_IP=$SERVER_IP
-SERVER_PORT=$SERVER_PORT
-SERVER_PASSWORD=$SERVER_PASSWORD
-EOL
+clear_iptables() {
+    echo "Сбрасываю правила iptables..."
+    sudo iptables -t nat -F
+    sudo iptables -t nat -X REDSOCKS
+}
 
+start() {
+    echo "Запуск Shadowsocks и Redsocks..."
     start_shadowsocks
     start_redsocks
     configure_iptables
+    echo "Перезагружаю Redsocks для стабильной работы..."
+    stop_redsocks
+    start_redsocks
     echo "Все сервисы запущены."
 }
 
 stop() {
-    echo "Загружаю параметры из конфигурационного файла..."
-    if [ -f \$CONFIG_FILE ]; then
-        source \$CONFIG_FILE
-    else
-        echo "Ошибка: конфигурационный файл \$CONFIG_FILE не найден!"
-        exit 1
-    fi
-
-    stop_shadowsocks
+    echo "Остановка всех сервисов..."
     stop_redsocks
+    stop_shadowsocks
+    clear_iptables
     echo "Все сервисы остановлены."
 }
 
