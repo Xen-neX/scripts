@@ -1,26 +1,11 @@
 #!/bin/bash
 
-# Установка shadowsocks-libev
-echo "Устанавливаю shadowsocks-libev..."
-sudo apt-get update
-sudo apt-get install -y shadowsocks-libev
-
-# Запрос параметров у пользователя
-read -p "Введите IP-адрес сервера: " SERVER_IP
-read -p "Введите порт сервера: " SERVER_PORT
-read -p "Введите пароль: " SERVER_PASSWORD
-
-# Создание скрипта shadowsocks.sh
-echo "Создаю скрипт shadowsocks.sh..."
-sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
-#!/bin/bash
-
 start_ssredir() {
     (ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
 }
 
 stop_ssredir() {
-    kill -9 \$(pidof ss-redir) &>/dev/null
+    kill -9 $(pidof ss-redir) &>/dev/null
 }
 
 start_iptables() {
@@ -89,52 +74,20 @@ restart() {
 }
 
 main() {
-    if [ \$# -eq 0 ]; then
-        echo "usage: \$0 start|stop|restart ..."
+    if [ $# -eq 0 ]; then
+        echo "usage: $0 start|stop|restart ..."
         return 1
     fi
 
-    for funcname in \"\$@\"; do
-        if [ \"\$(type -t \$funcname)\" != 'function' ]; then
-            echo \"'\$funcname' not a shell function\"
+    for funcname in "$@"; do
+        if declare -F "$funcname" &>/dev/null; then
+            $funcname
+        else
+            echo "'$funcname' not a shell function"
             return 1
         fi
     done
-
-    for funcname in \"\$@\"; do
-        \$funcname
-    done
     return 0
 }
-main \"\$@\"
-EOF
 
-# Делаем скрипт исполняемым
-sudo chmod +x /usr/local/bin/shadowsocks.sh
-
-# Создание systemd-сервиса
-echo "Создаю systemd-сервис для shadowsocks.sh..."
-sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
-[Unit]
-Description=Shadowsocks Custom Script
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/shadowsocks.sh start
-ExecStop=/usr/local/bin/shadowsocks.sh stop
-Restart=on-failure
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Активируем и запускаем сервис
-echo "Активирую и запускаю сервис shadowsocks.service..."
-sudo systemctl daemon-reload
-sudo systemctl enable shadowsocks.service
-sudo systemctl start shadowsocks.service
-
-# Проверка статуса
-echo "Сервис shadowsocks.service запущен. Проверяю статус..."
-sudo systemctl status shadowsocks.service
+main "$@"
