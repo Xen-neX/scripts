@@ -16,14 +16,17 @@ sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 start_ssredir() {
+    echo "Запускаю ss-redir..."
     (ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
 }
 
 stop_ssredir() {
-    kill -9 $(pidof ss-redir) &>/dev/null
+    echo "Останавливаю ss-redir..."
+    kill -9 \$(pidof ss-redir) &>/dev/null
 }
 
 start_iptables() {
+    echo "Настраиваю iptables..."
     iptables -t mangle -N SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
@@ -42,70 +45,77 @@ start_iptables() {
 }
 
 stop_iptables() {
+    echo "Очищаю iptables..."
     iptables -t mangle -F SSREDIR &>/dev/null
     iptables -t mangle -X SSREDIR &>/dev/null
 }
 
 start_iproute2() {
+    echo "Настраиваю iproute2..."
     ip route add local default dev lo table 100
     ip rule add fwmark 0x2333 table 100
 }
 
 stop_iproute2() {
+    echo "Очищаю iproute2..."
     ip rule del table 100 &>/dev/null
     ip route flush table 100 &>/dev/null
 }
 
 start_resolvconf() {
+    echo "Настраиваю resolv.conf..."
     echo "nameserver 1.1.1.1" >/etc/resolv.conf
 }
 
 stop_resolvconf() {
+    echo "Восстанавливаю resolv.conf..."
     echo "nameserver 114.114.114.114" >/etc/resolv.conf
 }
 
 start() {
-    echo "start ..."
+    echo "Запуск процесса..."
     start_ssredir
     start_iptables
     start_iproute2
     start_resolvconf
-    echo "start end"
+    echo "Процесс запущен."
 }
 
 stop() {
-    echo "stop ..."
+    echo "Остановка процесса..."
     stop_resolvconf
     stop_iproute2
     stop_iptables
     stop_ssredir
-    echo "stop end"
+    echo "Процесс остановлен."
 }
 
 restart() {
+    echo "Перезапуск процесса..."
     stop
     sleep 1
     start
 }
 
 main() {
-    if [ $# -eq 0 ]; then
-        echo "usage: $0 start|stop|restart ..."
+    echo "Переданы аргументы: \$@"
+    if [ \$# -eq 0 ]; then
+        echo "usage: \$0 start|stop|restart ..."
         return 1
     fi
 
-    for funcname in "$@"; do
-        if declare -F "$funcname" &>/dev/null; then
-            $funcname
+    for funcname in "\$@"; do
+        if declare -F "\$funcname" > /dev/null; then
+            echo "Выполняется функция: \$funcname"
+            \$funcname
         else
-            echo "'$funcname' not a shell function"
+            echo "Ошибка: '\$funcname' не является shell-функцией"
             return 1
         fi
     done
-    return 0
 }
 
-main "$@"
+main "\$@"
 EOF
 
 # Делаем скрипт исполняемым
