@@ -5,15 +5,23 @@ echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev
 
-# Запрос параметров у пользователя
-read -p "Введите IP-адрес сервера: " SERVER_IP
-read -p "Введите порт сервера: " SERVER_PORT
-read -p "Введите пароль: " SERVER_PASSWORD
+# Функция для запроса параметров у пользователя
+get_user_input() {
+    read -p "Введите IP-адрес сервера: " SERVER_IP
+    read -p "Введите порт сервера: " SERVER_PORT
+    read -p "Введите пароль: " SERVER_PASSWORD
+}
 
-# Создание скрипта shadowsocks.sh
-echo "Создаю скрипт shadowsocks.sh..."
-sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+# Функция для создания скрипта shadowsocks.sh
+create_shadowsocks_script() {
+    echo "Создаю скрипт shadowsocks.sh..."
+    sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
+
+# Путь к файлу резервных правил iptables
+IPTABLES_BACKUP="/etc/iptables/rules.v4.bak"
+# Путь к резервной копии resolv.conf
+RESOLVCONF_BACKUP="/etc/resolv.conf.bak"
 
 start_ssredir() {
     echo "Запускаю ss-redir..."
@@ -27,6 +35,8 @@ stop_ssredir() {
 
 start_iptables() {
     echo "Настраиваю iptables..."
+    # Сохраняем текущие правила iptables
+    iptables-save > \$IPTABLES_BACKUP
     iptables -t mangle -N SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
@@ -46,8 +56,8 @@ start_iptables() {
 
 stop_iptables() {
     echo "Очищаю iptables..."
-    iptables -t mangle -F SSREDIR &>/dev/null
-    iptables -t mangle -X SSREDIR &>/dev/null
+    # Восстанавливаем предыдущие правила iptables
+    iptables-restore < \$IPTABLES_BACKUP
 }
 
 start_iproute2() {
@@ -64,12 +74,15 @@ stop_iproute2() {
 
 start_resolvconf() {
     echo "Настраиваю resolv.conf..."
+    # Сохраняем текущий resolv.conf
+    cp /etc/resolv.conf \$RESOLVCONF_BACKUP
     echo "nameserver 1.1.1.1" >/etc/resolv.conf
 }
 
 stop_resolvconf() {
     echo "Восстанавливаю resolv.conf..."
-    echo "nameserver 114.114.114.114" >/etc/resolv.conf
+    # Восстанавливаем предыдущий resolv.conf
+    cp \$RESOLVCONF_BACKUP /etc/resolv.conf
 }
 
 start() {
@@ -103,7 +116,6 @@ main() {
         echo "usage: \$0 start|stop|restart ..."
         exit 1
     fi
-
     for funcname in "\$@"; do
         if declare -F "\$funcname" > /dev/null; then
             echo "Выполняется функция: \$funcname"
@@ -117,33 +129,13 @@ main() {
 
 main "\$@"
 EOF
+    # Делаем скрипт исполняемым
+    sudo chmod +x /usr/local/bin/shadowsocks.sh
+}
 
-# Делаем скрипт исполняемым
-sudo chmod +x /usr/local/bin/shadowsocks.sh
-
-# Создание systemd-сервиса
-echo "Создаю systemd-сервис для shadowsocks.sh..."
-sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
-[Unit]
-Description=Shadowsocks Custom Script
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/shadowsocks.sh start
-ExecStop=/usr/local/bin/shadowsocks.sh stop
-Restart=on-failure
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Активируем и запускаем сервис
-echo "Активирую и запускаю сервис shadowsocks.service..."
-sudo systemctl daemon-reload
-sudo systemctl enable shadowsocks.service
-sudo systemctl start shadowsocks.service
-
-# Проверка статуса
-echo "Сервис shadowsocks.service запущен. Проверяю статус..."
-sudo systemctl status shadowsocks.service
+# Функция для создания systemd-сервиса
+create_systemd_service() {
+    echo "Создаю systemd-сервис для shadowsocks.sh..."
+    sudo tee /etc/systemd/system/sh
+::contentReference[oaicite:0]{index=0}
+ 
