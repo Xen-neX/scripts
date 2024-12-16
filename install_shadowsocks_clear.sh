@@ -45,7 +45,6 @@ start_iptables() {
     [ ! -d /etc/iptables ] && mkdir -p /etc/iptables
     iptables-save > \$IPTABLES_BACKUP
 
-    iptables -t mangle -N SSREDIR 2>/dev/null || echo "Цепочка SSREDIR уже существует."
     iptables -t mangle -N SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
