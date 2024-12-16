@@ -1,51 +1,39 @@
 #!/bin/bash
 
-# Установка Shadowsocks
-install_shadowsocks() {
-    echo "Установка shadowsocks-libev..."
-    sudo apt-get update
-    sudo apt-get install -y shadowsocks-libev
-    echo "Shadowsocks установлен."
-}
+# Установка Shadowsocks-libev
+echo "Устанавливаю shadowsocks-libev..."
+sudo apt-get update
+sudo apt-get install -y shadowsocks-libev
 
 # Запрос параметров у пользователя
-get_user_input() {
-    read -p "Введите IP-адрес сервера: " SERVER_IP
-    read -p "Введите порт сервера: " SERVER_PORT
-    read -p "Введите пароль: " SERVER_PASSWORD
-}
+read -p "Введите IP-адрес сервера: " SERVER_IP
+read -p "Введите порт сервера: " SERVER_PORT
+read -p "Введите пароль: " SERVER_PASSWORD
+
+# Запрос пользовательских правил
+echo "Введите протоколы и порты для перенаправления (пример: tcp 443 tcp 80 udp 123456). Оставьте пустым для использования стандартных правил."
+read -p "Введите правила: " CUSTOM_RULES
 
 # Создание скрипта shadowsocks.sh
-create_shadowsocks_script() {
-    echo "Создаю скрипт shadowsocks.sh..."
-    sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+echo "Создаю скрипт shadowsocks.sh..."
+sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
-IPTABLES_BACKUP="/etc/iptables/rules.v4.bak"
-RESOLVCONF_BACKUP="/etc/resolv.conf.bak"
+CUSTOM_RULES="$CUSTOM_RULES"
 
 start_ssredir() {
-    echo "Запуск ss-redir..."
-    nohup ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &
-    sleep 2
-    if ! pgrep -f ss-redir > /dev/null; then
-        echo "Ошибка: ss-redir не запустился!"
-        exit 1
-    fi
-    echo "ss-redir успешно запущен."
+    echo "Запускаю ss-redir..."
+    (ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
 }
 
 stop_ssredir() {
-    echo "Остановка ss-redir..."
-    pkill -f ss-redir
+    echo "Останавливаю ss-redир..."
+    kill -9 \$(pidof ss-redir) &>/dev/null
 }
 
 start_iptables() {
-    echo "Настройка iptables..."
-    [ ! -d /etc/iptables ] && mkdir -p /etc/iptables
-    iptables-save > \$IPTABLES_BACKUP
-
-    iptables -t mangle -N SSREDIR
+    echo "Настраиваю iptables..."
+    iptables -t mangle -N SSREDIR 2>/dev/null || echo "Цепочка SSREDIR уже существует."
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
     iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
@@ -54,34 +42,60 @@ start_iptables() {
     iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
-    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
-    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+
+    if [ -n "\$CUSTOM_RULES" ]; then
+        echo "Добавляю пользовательские правила: \$CUSTOM_RULES"
+        for rule in \$CUSTOM_RULES; do
+            protocol=\$(echo \$rule | cut -d' ' -f1)
+            port=\$(echo \$rule | cut -d' ' -f2)
+            if [ "\$protocol" == "tcp" ]; then
+                iptables -t mangle -A PREROUTING -p tcp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+            elif [ "\$protocol" == "udp" ]; then
+                iptables -t mangle -A PREROUTING -p udp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+            fi
+        done
+    else
+        echo "Использую стандартные правила."
+        iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+        iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+        iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+        iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    fi
 }
 
 stop_iptables() {
-    echo "Восстановление iptables..."
-    iptables-restore < \$IPTABLES_BACKUP
+    echo "Очищаю iptables..."
+    iptables -t mangle -F SSREDIR &>/dev/null
+    iptables -t mangle -X SSREDIR &>/dev/null
+}
+
+start_iproute2() {
+    echo "Настраиваю iproute2..."
+    ip route add local default dev lo table 100
+    ip rule add fwmark 0x2333 table 100
+}
+
+stop_iproute2() {
+    echo "Очищаю iproute2..."
+    ip rule del table 100 &>/dev/null
+    ip route flush table 100 &>/dev/null
 }
 
 start_resolvconf() {
-    echo "Настройка resolv.conf..."
-    cp /etc/resolv.conf \$RESOLVCONF_BACKUP
-    echo "nameserver 1.1.1.1" > /etc/resolv.conf
+    echo "Настраиваю resolv.conf..."
+    echo "nameserver 1.1.1.1" >/etc/resolv.conf
 }
 
 stop_resolvconf() {
-    echo "Восстановление resolv.conf..."
-    cp \$RESOLVCONF_BACKUP /etc/resolv.conf
+    echo "Восстанавливаю resolv.conf..."
+    echo "nameserver 114.114.114.114" >/etc/resolv.conf
 }
 
 start() {
     echo "Запуск процесса..."
     start_ssredir
     start_iptables
+    start_iproute2
     start_resolvconf
     echo "Процесс запущен."
 }
@@ -89,55 +103,66 @@ start() {
 stop() {
     echo "Остановка процесса..."
     stop_resolvconf
+    stop_iproute2
     stop_iptables
     stop_ssredir
     echo "Процесс остановлен."
 }
 
-case "\$1" in
-    start) start ;;
-    stop) stop ;;
-    restart) stop && start ;;
-    *) echo "Использование: \$0 {start|stop|restart}" ;;
-esac
-EOF
-    sudo chmod +x /usr/local/bin/shadowsocks.sh
-    echo "Скрипт shadowsocks.sh создан."
+restart() {
+    echo "Перезапуск процесса..."
+    stop
+    sleep 1
+    start
 }
 
+main() {
+    echo "Переданы аргументы: \$@"
+    if [ \$# -eq 0 ]; then
+        echo "usage: \$0 start|stop|restart ..."
+        exit 1
+    fi
+
+    for funcname in "\$@"; do
+        if declare -F "\$funcname" > /dev/null; then
+            echo "Выполняется функция: \$funcname"
+            \$funcname
+        else
+            echo "Ошибка: '\$funcname' не является shell-функцией"
+            exit 1
+        fi
+    done
+}
+
+main "\$@"
+EOF
+
+# Делаем скрипт исполняемым
+sudo chmod +x /usr/local/bin/shadowsocks.sh
+
 # Создание systemd-сервиса
-create_systemd_service() {
-    echo "Создаю systemd-сервис shadowsocks..."
-    sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
+echo "Создаю systemd-сервис для shadowsocks.sh..."
+sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
 [Unit]
-Description=Shadowsocks Proxy Service
+Description=Shadowsocks Custom Script
 After=network.target
 
 [Service]
-Type=forking
 ExecStart=/usr/local/bin/shadowsocks.sh start
 ExecStop=/usr/local/bin/shadowsocks.sh stop
-ExecReload=/usr/local/bin/shadowsocks.sh restart
-Restart=always
+Restart=on-failure
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    echo "Служба shadowsocks создана."
-}
-
-# Основной процесс выполнения
-echo "Запускается процесс установки и настройки..."
-install_shadowsocks
-get_user_input
-create_shadowsocks_script
-create_systemd_service
 
 # Активируем и запускаем сервис
 echo "Активирую и запускаю сервис shadowsocks.service..."
 sudo systemctl daemon-reload
 sudo systemctl enable shadowsocks.service
-sudo systemctl restart shadowsocks.service
+sudo systemctl start shadowsocks.service
 
-echo "Проверка статуса службы shadowsocks.service:"
+# Проверка статуса
+echo "Сервис shadowsocks.service запущен. Проверяю статус..."
 sudo systemctl status shadowsocks.service
