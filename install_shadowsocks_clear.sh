@@ -40,6 +40,9 @@ stop_ssredir() {
 start_iptables() {
     echo "Настраиваю iptables..."
     iptables -t mangle -N SSREDIR 2>/dev/null || echo "Цепочка SSREDIR уже существует."
+    iptables -t mangle -F SSREDIR
+
+    # Правила для цепочки SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
     iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
@@ -49,27 +52,28 @@ start_iptables() {
     iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
 
+    # Подключаем SSREDIR к PREROUTING и OUTPUT
+    iptables -t mangle -A PREROUTING -p tcp -j SSREDIR
+    iptables -t mangle -A PREROUTING -p udp -j SSREDIR
+    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+
+    # Пользовательские правила
     if [ -n "\$CUSTOM_RULES" ]; then
         echo "Добавляю пользовательские правила: \$CUSTOM_RULES"
         for rule in \$CUSTOM_RULES; do
             protocol=\$(echo \$rule | cut -d' ' -f1)
             port=\$(echo \$rule | cut -d' ' -f2)
             if [ "\$protocol" == "tcp" ]; then
-                iptables -t mangle -A PREROUTING -p tcp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+                iptables -t mangle -A PREROUTING -p tcp --dport \$port -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333
                 echo "Добавлено правило: перенаправление TCP трафика на порт \$port"
             elif [ "\$protocol" == "udp" ]; then
-                iptables -t mangle -A PREROUTING -p udp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+                iptables -t mangle -A PREROUTING -p udp --dport \$port -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333
                 echo "Добавлено правило: перенаправление UDP трафика на порт \$port"
             else
                 echo "Неизвестный протокол: \$protocol. Пропускаю."
             fi
         done
-    else
-        echo "Использую стандартные правила."
-        iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-        iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-        iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-        iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     fi
 }
 
