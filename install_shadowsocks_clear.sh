@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Установка Shadowsocks-libev
+# Установка shadowsocks-libev
 echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev
@@ -10,71 +10,92 @@ read -p "Введите IP-адрес сервера: " SERVER_IP
 read -p "Введите порт сервера: " SERVER_PORT
 read -p "Введите пароль: " SERVER_PASSWORD
 
-# Запрос пользовательских правил
-echo "Введите протоколы и порты для перенаправления (пример: tcp 443 tcp 80 udp 123456). Оставьте пустым для использования стандартных правил."
-read -p "Введите правила: " CUSTOM_RULES
+# Запрос пользовательских правил перенаправления
+echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
+echo "Формат: tcp 443 tcp 80 udp 12345"
+echo "Если оставить пустым, будут использованы старые правила."
+read -p "Протоколы и порты: " CUSTOM_RULES
 
 # Создание скрипта shadowsocks.sh
 echo "Создаю скрипт shadowsocks.sh..."
 sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
+SERVER_IP="$SERVER_IP"
+SERVER_PORT="$SERVER_PORT"
+SERVER_PASSWORD="$SERVER_PASSWORD"
 CUSTOM_RULES="$CUSTOM_RULES"
 
 start_ssredir() {
     echo "Запускаю ss-redir..."
-    nohup ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &
-    sleep 2
-    if ! pgrep -f ss-redir > /dev/null; then
-        echo "Ошибка: ss-redir не запустился!"
-        exit 1
-    fi
-    echo "ss-redir успешно запущен."
+    (ss-redir -s \$SERVER_IP -p \$SERVER_PORT -m chacha20-ietf-poly1305 -k \$SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
 }
 
 stop_ssredir() {
     echo "Останавливаю ss-redir..."
-    pkill -f ss-redir
+    kill -9 \$(pidof ss-redir) &>/dev/null
 }
 
 start_iptables() {
     echo "Настраиваю iptables..."
-    iptables -t mangle -N SSREDIR 2>/dev/null || echo "Цепочка SSREDIR уже существует."
+    iptables -t mangle -N SSREDIR 2>/dev/null
     iptables -t mangle -F SSREDIR
+    # Удалим старые правила из цепочек OUTPUT и PREROUTING перед добавлением новых
+    iptables -t mangle -D OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -F SSREDIR
+    iptables -t mangle -X SSREDIR
+    iptables -t mangle -N SSREDIR
 
-    # Правила для цепочки SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
-    iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
-    iptables -t mangle -A SSREDIR -p udp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    # Исключаем сам Shadowsocks сервер
+    iptables -t mangle -A SSREDIR -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+    iptables -t mangle -A SSREDIR -p udp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+    # Исключаем локальный трафик
     iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
-    iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
-    iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
 
-    # Подключаем SSREDIR к PREROUTING и OUTPUT
-    iptables -t mangle -A PREROUTING -p tcp -j SSREDIR
-    iptables -t mangle -A PREROUTING -p udp -j SSREDIR
-    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-
-    # Пользовательские правила
+    # Маркируем трафик
+    # Если пользователь ввёл порты, то перенаправляем только их
     if [ -n "\$CUSTOM_RULES" ]; then
-        echo "Добавляю пользовательские правила: \$CUSTOM_RULES"
-        for rule in \$CUSTOM_RULES; do
-            protocol=\$(echo \$rule | cut -d' ' -f1)
-            port=\$(echo \$rule | cut -d' ' -f2)
-            if [ "\$protocol" == "tcp" ]; then
-                iptables -t mangle -A PREROUTING -p tcp --dport \$port -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333
-                echo "Добавлено правило: перенаправление TCP трафика на порт \$port"
-            elif [ "\$protocol" == "udp" ]; then
-                iptables -t mangle -A PREROUTING -p udp --dport \$port -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333
-                echo "Добавлено правило: перенаправление UDP трафика на порт \$port"
-            else
-                echo "Неизвестный протокол: \$protocol. Пропускаю."
+        # Пример: tcp 443 tcp 80 udp 12345
+        # Разберём строки по 2 поля: протокол и порт
+        PROTO_PORTS=(\$CUSTOM_RULES)
+        COUNT=\${#PROTO_PORTS[@]}
+        i=0
+        while [ \$i -lt \$COUNT ]; do
+            PROTO=\${PROTO_PORTS[\$i]}
+            PORT=\${PROTO_PORTS[\$((i+1))]}
+            i=\$((i+2))
+
+            # Для tcp
+            if [ "\$PROTO" = "tcp" ]; then
+                # Маркируем TCP
+                iptables -t mangle -A SSREDIR -p tcp --dport \$PORT -j MARK --set-mark 0x2333
+            elif [ "\$PROTO" = "udp" ]; then
+                # Маркируем UDP (только для новых соединений)
+                iptables -t mangle -A SSREDIR -p udp --dport \$PORT -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
             fi
         done
+    else
+        # Старое поведение — перенаправляем весь трафик
+        iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
+        iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     fi
+
+    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
+
+    # Применяем правила для локального трафика (OUTPUT) и входящего (PREROUTING)
+    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+
+    # Применяем TPROXY для перенаправленного трафика
+    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
 }
 
 stop_iptables() {
@@ -85,8 +106,8 @@ stop_iptables() {
 
 start_iproute2() {
     echo "Настраиваю iproute2..."
-    ip route add local default dev lo table 100
-    ip rule add fwmark 0x2333 table 100
+    ip route add local default dev lo table 100 2>/dev/null
+    ip rule add fwmark 0x2333 table 100 2>/dev/null
 }
 
 stop_iproute2() {
@@ -97,6 +118,7 @@ stop_iproute2() {
 
 start_resolvconf() {
     echo "Настраиваю resolv.conf..."
+    # DNS всегда перенаправляется через shadowsocks
     echo "nameserver 1.1.1.1" >/etc/resolv.conf
 }
 
