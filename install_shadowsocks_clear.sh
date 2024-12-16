@@ -17,18 +17,27 @@ read -p "Введите правила: " CUSTOM_RULES
 # Создание скрипта shadowsocks.sh
 echo "Создаю скрипт shadowsocks.sh..."
 sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
-#!/bin/bash
+##!/bin/bash
 
-CUSTOM_RULES="$CUSTOM_RULES"
+CUSTOM_RULES="tcp 443 tcp 80"  # Используйте эту строку для тестирования
+SERVER_IP="<ваш-сервер-IP>"    # Подставьте реальные значения
+SERVER_PORT="<ваш-порт>"
+SERVER_PASSWORD="<ваш-пароль>"
 
 start_ssredir() {
     echo "Запускаю ss-redir..."
-    (ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
+    nohup ss-redir -s $SERVER_IP -p $SERVER_PORT -m chacha20-ietf-poly1305 -k $SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &
+    sleep 2
+    if ! pgrep -f ss-redir > /dev/null; then
+        echo "Ошибка: ss-redir не запустился!"
+        exit 1
+    fi
+    echo "ss-redir успешно запущен."
 }
 
 stop_ssredir() {
-    echo "Останавливаю ss-redир..."
-    kill -9 \$(pidof ss-redir) &>/dev/null
+    echo "Останавливаю ss-redir..."
+    pkill -f ss-redir
 }
 
 start_iptables() {
@@ -43,15 +52,19 @@ start_iptables() {
     iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
 
-    if [ -n "\$CUSTOM_RULES" ]; then
-        echo "Добавляю пользовательские правила: \$CUSTOM_RULES"
-        for rule in \$CUSTOM_RULES; do
-            protocol=\$(echo \$rule | cut -d' ' -f1)
-            port=\$(echo \$rule | cut -d' ' -f2)
-            if [ "\$protocol" == "tcp" ]; then
-                iptables -t mangle -A PREROUTING -p tcp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
-            elif [ "\$protocol" == "udp" ]; then
-                iptables -t mangle -A PREROUTING -p udp --dport \$port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+    if [ -n "$CUSTOM_RULES" ]; then
+        echo "Добавляю пользовательские правила: $CUSTOM_RULES"
+        for rule in $CUSTOM_RULES; do
+            protocol=$(echo $rule | awk '{print $1}')
+            port=$(echo $rule | awk '{print $2}')
+            if [ "$protocol" == "tcp" ]; then
+                iptables -t mangle -A PREROUTING -p tcp --dport $port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+                echo "Добавлено правило: перенаправление TCP трафика на порт $port"
+            elif [ "$protocol" == "udp" ]; then
+                iptables -t mangle -A PREROUTING -p udp --dport $port -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+                echo "Добавлено правило: перенаправление UDP трафика на порт $port"
+            else
+                echo "Неизвестный протокол: $protocol. Пропускаю."
             fi
         done
     else
@@ -117,24 +130,24 @@ restart() {
 }
 
 main() {
-    echo "Переданы аргументы: \$@"
-    if [ \$# -eq 0 ]; then
-        echo "usage: \$0 start|stop|restart ..."
+    echo "Переданы аргументы: $@"
+    if [ $# -eq 0 ]; then
+        echo "usage: $0 start|stop|restart ..."
         exit 1
     fi
 
-    for funcname in "\$@"; do
-        if declare -F "\$funcname" > /dev/null; then
-            echo "Выполняется функция: \$funcname"
-            \$funcname
+    for funcname in "$@"; do
+        if declare -F "$funcname" > /dev/null; then
+            echo "Выполняется функция: $funcname"
+            $funcname
         else
-            echo "Ошибка: '\$funcname' не является shell-функцией"
+            echo "Ошибка: '$funcname' не является shell-функцией"
             exit 1
         fi
     done
 }
 
-main "\$@"
+main "$@"
 EOF
 
 # Делаем скрипт исполняемым
