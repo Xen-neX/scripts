@@ -1,5 +1,5 @@
 #!/bin/bash
-
+echo "Версия 1.0 - полное прозрачное проксирование трафика"
 # Установка shadowsocks-libev
 echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
