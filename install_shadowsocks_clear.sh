@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Установка shadowsocks-libev
-echo "Версия 1.0 - проксирование всего tcp и udp или выбор портов"
+echo "Версия 1.1 - полное прозрачное проксирование трафика или выбор портов + восстановление системного днс при stop"
 echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev
@@ -17,6 +17,9 @@ echo "Формат: tcp 443 tcp 80 udp 56789"
 echo "Если оставить пустым, будут использованы старые правила."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
+# Сохраняем текущий DNS
+SYSTEM_DNS="$(cat /etc/resolv.conf)"
+
 # Создание скрипта shadowsocks.sh
 echo "Создаю скрипт shadowsocks.sh..."
 sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
@@ -26,6 +29,8 @@ SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 SERVER_PASSWORD="$SERVER_PASSWORD"
 CUSTOM_RULES="$CUSTOM_RULES"
+SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")  # экранируем содержимое resolv.conf, чтобы корректно поместить в переменную
+SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_ssredir() {
     echo "Запускаю ss-redir..."
@@ -41,7 +46,7 @@ start_iptables() {
     echo "Настраиваю iptables..."
     iptables -t mangle -N SSREDIR 2>/dev/null
     iptables -t mangle -F SSREDIR
-    # Удалим старые правила из цепочек OUTPUT и PREROUTING перед добавлением новых
+    # Удалим старые правила из OUTPUT и PREROUTING, если они есть
     iptables -t mangle -D OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
     iptables -t mangle -D OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
     iptables -t mangle -D PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
@@ -58,11 +63,8 @@ start_iptables() {
     # Исключаем локальный трафик
     iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
 
-    # Маркируем трафик
-    # Если пользователь ввёл порты, то перенаправляем только их
     if [ -n "\$CUSTOM_RULES" ]; then
-        # Пример: tcp 443 tcp 80 udp 12345
-        # Разберём строки по 2 поля: протокол и порт
+        # Если пользователь ввёл правила, применяем их
         PROTO_PORTS=(\$CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
         i=0
@@ -71,12 +73,9 @@ start_iptables() {
             PORT=\${PROTO_PORTS[\$((i+1))]}
             i=\$((i+2))
 
-            # Для tcp
             if [ "\$PROTO" = "tcp" ]; then
-                # Маркируем TCP
                 iptables -t mangle -A SSREDIR -p tcp --dport \$PORT -j MARK --set-mark 0x2333
             elif [ "\$PROTO" = "udp" ]; then
-                # Маркируем UDP (только для новых соединений)
                 iptables -t mangle -A SSREDIR -p udp --dport \$PORT -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
             fi
         done
@@ -88,7 +87,7 @@ start_iptables() {
 
     iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
 
-    # Применяем правила для локального трафика (OUTPUT) и входящего (PREROUTING)
+    # Применяем правила для локального (OUTPUT) и не-локального (PREROUTING) трафика
     iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
@@ -125,7 +124,8 @@ start_resolvconf() {
 
 stop_resolvconf() {
     echo "Восстанавливаю resolv.conf..."
-    echo "nameserver 114.114.114.114" >/etc/resolv.conf
+    # Восстанавливаем исходное значение DNS
+    echo "\$SYSTEM_DNS" > /etc/resolv.conf
 }
 
 start() {
