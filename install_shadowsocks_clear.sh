@@ -35,10 +35,21 @@ stop_ssredir() {
 
 start_iptables() {
     echo "Настройка iptables..."
-    iptables-save > \$IPTABLES_BACKUP
     iptables -t mangle -N SSREDIR
+    iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
+    iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
+    iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    iptables -t mangle -A SSREDIR -p udp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
-    iptables -t mangle -A OUTPUT -p tcp -j SSREDIR
+    iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
+    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
+    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
 }
 
 stop_iptables() {
@@ -103,26 +114,29 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo systemctl daemon-reload
-    sudo systemctl enable shadowsocks.service
     echo "Служба shadowsocks создана."
 }
 
-# Проверка аргументов
+# Основной блок
 if [ "$1" == "install" ]; then
     install_shadowsocks
     get_user_input
     create_shadowsocks_script
     create_systemd_service
-    echo "Запускаю службу shadowsocks..."
-    sudo systemctl start shadowsocks
-    echo "Проверка статуса службы shadowsocks:"
-    sudo systemctl status shadowsocks
+
+    # Активируем и запускаем сервис
+    echo "Активирую и запускаю сервис shadowsocks.service..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable shadowsocks.service
+    sudo systemctl start shadowsocks.service
+
+    echo "Проверка статуса службы shadowsocks.service:"
+    sudo systemctl status shadowsocks.service
 else
     echo "Используйте: $0 install"
     echo "После установки команды:"
-    echo "  sudo systemctl start shadowsocks"
-    echo "  sudo systemctl stop shadowsocks"
-    echo "  sudo systemctl restart shadowsocks"
-    echo "  sudo systemctl status shadowsocks"
+    echo "  sudo systemctl start shadowsocks.service"
+    echo "  sudo systemctl stop shadowsocks.service"
+    echo "  sudo systemctl restart shadowsocks.service"
+    echo "  sudo systemctl status shadowsocks.service"
 fi
