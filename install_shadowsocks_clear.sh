@@ -133,9 +133,8 @@ EOF
     sudo chmod +x /usr/local/bin/shadowsocks.sh
 }
 
-# Функция для создания systemd-сервиса
-create_systemd_service() {
-    echo "Создаю systemd-сервис для shadowsocks.sh..."
-    sudo tee /etc/systemd/system/sh
-::contentReference[oaicite:0]{index=0}
- 
+# Основной блок выполнения
+get_user_input
+create_shadowsocks_script
+
+echo "Скрипт создан. Используйте команды start, stop, restart через shadowsocks.sh"
