@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Установка shadowsocks-libev
+echo "Версия 1.0 - проксирование всего tcp и udp или выбор портов"
 echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev
@@ -12,7 +13,7 @@ read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
 echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
-echo "Формат: tcp 443 tcp 80 udp 12345"
+echo "Формат: tcp 443 tcp 80 udp 56789"
 echo "Если оставить пустым, будут использованы старые правила."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
