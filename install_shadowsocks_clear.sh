@@ -15,7 +15,7 @@ get_user_input() {
 # Функция для создания скрипта shadowsocks.sh
 create_shadowsocks_script() {
     echo "Создаю скрипт shadowsocks.sh..."
-    sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+    sudo tee /usr/local/bin/shadowsocks.sh > /dev/null << 'EOF'
 #!/bin/bash
 
 # Путь к файлу резервных правил iptables
@@ -30,13 +30,13 @@ start_ssredir() {
 
 stop_ssredir() {
     echo "Останавливаю ss-redir..."
-    kill -9 \$(pidof ss-redir) &>/dev/null
+    kill -9 $(pidof ss-redir) &>/dev/null
 }
 
 start_iptables() {
     echo "Настраиваю iptables..."
     # Сохраняем текущие правила iptables
-    iptables-save > \$IPTABLES_BACKUP
+    iptables-save > $IPTABLES_BACKUP
     iptables -t mangle -N SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
@@ -56,8 +56,7 @@ start_iptables() {
 
 stop_iptables() {
     echo "Очищаю iptables..."
-    # Восстанавливаем предыдущие правила iptables
-    iptables-restore < \$IPTABLES_BACKUP
+    iptables-restore < $IPTABLES_BACKUP
 }
 
 start_iproute2() {
@@ -74,15 +73,13 @@ stop_iproute2() {
 
 start_resolvconf() {
     echo "Настраиваю resolv.conf..."
-    # Сохраняем текущий resolv.conf
-    cp /etc/resolv.conf \$RESOLVCONF_BACKUP
-    echo "nameserver 1.1.1.1" >/etc/resolv.conf
+    cp /etc/resolv.conf $RESOLVCONF_BACKUP
+    echo "nameserver 1.1.1.1" > /etc/resolv.conf
 }
 
 stop_resolvconf() {
     echo "Восстанавливаю resolv.conf..."
-    # Восстанавливаем предыдущий resolv.conf
-    cp \$RESOLVCONF_BACKUP /etc/resolv.conf
+    cp $RESOLVCONF_BACKUP /etc/resolv.conf
 }
 
 start() {
@@ -111,24 +108,22 @@ restart() {
 }
 
 main() {
-    echo "Переданы аргументы: \$@"
-    if [ \$# -eq 0 ]; then
-        echo "usage: \$0 start|stop|restart ..."
+    if [ $# -eq 0 ]; then
+        echo "Usage: $0 start|stop|restart"
         exit 1
     fi
-    for funcname in "\$@"; do
-        if declare -F "\$funcname" > /dev/null; then
-            echo "Выполняется функция: \$funcname"
-            \$funcname
-        else
-            echo "Ошибка: '\$funcname' не является shell-функцией"
-            exit 1
-        fi
-    done
+
+    case $1 in
+        start) start ;;
+        stop) stop ;;
+        restart) restart ;;
+        *) echo "Usage: $0 start|stop|restart"; exit 1 ;;
+    esac
 }
 
-main "\$@"
+main "$@"
 EOF
+
     # Делаем скрипт исполняемым
     sudo chmod +x /usr/local/bin/shadowsocks.sh
 }
@@ -137,4 +132,4 @@ EOF
 get_user_input
 create_shadowsocks_script
 
-echo "Скрипт создан. Используйте команды start, stop, restart через shadowsocks.sh"
+echo "Скрипт создан. Используйте /usr/local/bin/shadowsocks.sh для управления сервисом."
