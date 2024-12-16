@@ -1,7 +1,15 @@
 #!/bin/bash
+echo "Версия 1.2 - полное прозрачное проксирование трафика или выбор портов + восстановление системного днс при stop и переустановке"
+# Проверяем, запущена ли служба shadowsocks.service
+if systemctl is-active --quiet shadowsocks.service; then
+    echo "shadowsocks.service активен. Останавливаю, чтобы восстановить системный DNS..."
+    sudo systemctl stop shadowsocks.service
+fi
 
-# Установка shadowsocks-libev
-echo "Версия 1.1 - полное прозрачное проксирование трафика или выбор портов + восстановление системного днс при stop"
+# Теперь, когда служба остановлена (или не была запущена),
+# резольв должен быть системным. Сохраняем системный DNS.
+SYSTEM_DNS="$(cat /etc/resolv.conf)"
+
 echo "Устанавливаю shadowsocks-libev..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev
@@ -13,12 +21,9 @@ read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
 echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
-echo "Формат: tcp 443 tcp 80 udp 56789"
+echo "Формат: tcp 443 tcp 80 udp 12345"
 echo "Если оставить пустым, будут использованы старые правила."
 read -p "Протоколы и порты: " CUSTOM_RULES
-
-# Сохраняем текущий DNS
-SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
 # Создание скрипта shadowsocks.sh
 echo "Создаю скрипт shadowsocks.sh..."
@@ -29,7 +34,7 @@ SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 SERVER_PASSWORD="$SERVER_PASSWORD"
 CUSTOM_RULES="$CUSTOM_RULES"
-SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")  # экранируем содержимое resolv.conf, чтобы корректно поместить в переменную
+SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")
 SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_ssredir() {
@@ -46,7 +51,6 @@ start_iptables() {
     echo "Настраиваю iptables..."
     iptables -t mangle -N SSREDIR 2>/dev/null
     iptables -t mangle -F SSREDIR
-    # Удалим старые правила из OUTPUT и PREROUTING, если они есть
     iptables -t mangle -D OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
     iptables -t mangle -D OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
     iptables -t mangle -D PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
@@ -64,7 +68,6 @@ start_iptables() {
     iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
 
     if [ -n "\$CUSTOM_RULES" ]; then
-        # Если пользователь ввёл правила, применяем их
         PROTO_PORTS=(\$CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
         i=0
@@ -80,7 +83,7 @@ start_iptables() {
             fi
         done
     else
-        # Старое поведение — перенаправляем весь трафик
+        # Старое поведение — перенаправляем весь TCP/UDP трафик
         iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
         iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     fi
@@ -93,7 +96,7 @@ start_iptables() {
     iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
 
-    # Применяем TPROXY для перенаправленного трафика
+    # Применяем TPROXY
     iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
     iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
 }
@@ -118,7 +121,6 @@ stop_iproute2() {
 
 start_resolvconf() {
     echo "Настраиваю resolv.conf..."
-    # DNS всегда перенаправляется через shadowsocks
     echo "nameserver 1.1.1.1" >/etc/resolv.conf
 }
 
