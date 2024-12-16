@@ -46,18 +46,19 @@ start_iptables() {
     iptables-save > \$IPTABLES_BACKUP
 
     iptables -t mangle -N SSREDIR 2>/dev/null || echo "Цепочка SSREDIR уже существует."
+    iptables -t mangle -N SSREDIR
     iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
     iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
-    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A SSREDIR -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
     iptables -t mangle -A SSREDIR -p udp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
-    iptables -t mangle -A PREROUTING -p tcp -j SSREDIR
-    iptables -t mangle -A PREROUTING -p udp -j SSREDIR
     iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
     iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
     iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
 }
