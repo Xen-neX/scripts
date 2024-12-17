@@ -33,9 +33,9 @@ tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "method": "chacha20-ietf-poly1305",
     "mode": "tcp_and_udp",
     "fast_open": true,
-    "no-delay": true,
+    "no_delay": true,
     "mptcp": true,
-    "reuse-port": true
+    "reuse_port": true
 }
 EOF
 
@@ -87,7 +87,6 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
     (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
-    sleep 1 # Важная задержка!
 }
 
 stop_shadowsocks() {
@@ -98,7 +97,6 @@ stop_shadowsocks() {
 start_redsocks() {
     echo "Запускаю Redsocks..."
     (nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &)
-    sleep 1 # Важная задержка!
 }
 
 stop_redsocks() {
@@ -156,14 +154,20 @@ configure_iptables() {
 }
 
 clear_iptables() {
-    # ... (остается без изменений)
+    echo "Очищаю iptables..."
+    /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -D OUTPUT -p udp --dport 53 -j REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -D OUTPUT -p udp -j REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -F 2>/dev/null
 }
 
 start() {
     start_shadowsocks
     start_redsocks
-    sleep 2 # Дополнительная задержка перед применением iptables
-    configure_iptables # Применяем iptables ПОСЛЕ запуска сервисов
+    # Сначала запускаем процессы, затем применяем iptables
+    configure_iptables
     start_resolvconf
     echo "Все сервисы запущены."
 }
