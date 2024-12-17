@@ -78,7 +78,7 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
-    (nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
+    (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
 }
 
 stop_shadowsocks() {
