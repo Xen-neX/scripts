@@ -229,6 +229,8 @@ echo "Активирую и запускаю сервис ss_redsocks..."
 systemctl daemon-reload
 systemctl enable ss_redsocks.service
 systemctl start ss_redsocks.service
+systemctl stop ss_redsocks.service
+systemctl start ss_redsocks.service
 
 echo "Проверка статуса:"
 systemctl status ss_redsocks.service
