@@ -65,6 +65,8 @@ dnstc {
 }
 EOF
 
+BACKUP_FILE="/var/tmp/iptables_backup_ss_redsocks.save"
+
 echo "Создаю скрипт /usr/local/bin/ss_redsocks.sh..."
 tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
@@ -72,7 +74,7 @@ tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 YOUR_SERVER_IP="$YOUR_SERVER_IP"
-BACKUP_FILE="/var/tmp/iptables_backup_ss_redsocks.save"
+BACKUP_FILE="$BACKUP_FILE"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -121,7 +123,7 @@ start() {
 stop() {
     stop_shadowsocks
     stop_redsocks
-    echo "Процессы остановлены. Восстановление iptables будет сделано systemd в ExecStopPost."
+    echo "Процессы остановлены. Восстановление iptables будет выполнено ExecStopPost."
 }
 
 restart() {
@@ -153,6 +155,20 @@ EOF
 
 chmod +x /usr/local/bin/ss_redsocks.sh
 
+echo "Создаю скрипт для восстановления iptables /usr/local/bin/restore_iptables.sh..."
+tee /usr/local/bin/restore_iptables.sh > /dev/null <<EOF
+#!/bin/sh
+if [ -f "$BACKUP_FILE" ]; then
+    echo "Восстанавливаю iptables из \$BACKUP_FILE"
+    /usr/sbin/iptables-restore < "$BACKUP_FILE" || echo "Ошибка при восстановлении iptables!"
+    rm "$BACKUP_FILE"
+else
+    echo "Файл бэкапа iptables не найден!"
+fi
+EOF
+
+chmod +x /usr/local/bin/restore_iptables.sh
+
 echo "Создаю systemd-сервис ss_redsocks.service..."
 tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
@@ -164,7 +180,10 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/ss_redsocks.sh start
 ExecStop=/usr/local/bin/ss_redsocks.sh stop
-ExecStopPost=/usr/sbin/iptables-restore < /var/tmp/iptables_backup_ss_redsocks.save
+ExecStopPost=/usr/local/bin/restore_iptables.sh
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
 echo "Активирую и запускаю сервис ss_redsocks..."
@@ -172,5 +191,4 @@ systemctl daemon-reload
 systemctl enable ss_redsocks.service
 systemctl start ss_redsocks.service
 
-echo "Проверка статуса:"
-systemctl status ss_redsocks.service
+echo "Теперь при остановке сервиса (systemctl stop ss_redsocks.service) iptables будет восстанавливаться через ExecStopPost."
