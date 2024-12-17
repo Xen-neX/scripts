@@ -1,8 +1,8 @@
 #!/bin/bash
 # Установка необходимых пакетов
 echo "Устанавливаю необходимые пакеты..."
-apt-get update
-apt-get install -y shadowsocks-libev redsocks
+sudo apt-get update
+sudo apt-get install -y shadowsocks-libev redsocks
 
 # Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
@@ -11,7 +11,7 @@ read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
 # Создание конфигурационного файла Shadowsocks
 echo "Создаю конфигурацию Shadowsocks..."
-tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
@@ -25,7 +25,7 @@ EOF
 
 # Создание конфигурационного файла Redsocks
 echo "Создаю конфигурацию Redsocks..."
-tee /etc/redsocks.conf > /dev/null <<EOF
+sudo tee /etc/redsocks.conf > /dev/null <<EOF
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -58,11 +58,8 @@ EOF
 
 # Создание скрипта для запуска Shadowsocks и Redsocks
 echo "Создаю скрипт для запуска Shadowsocks и Redsocks..."
-tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
+sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
-
-SERVER_IP="$SERVER_IP"
-SERVER_PORT="$SERVER_PORT"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -87,21 +84,38 @@ stop_redsocks() {
 configure_iptables() {
     echo "Настраиваю iptables..."
     YOUR_SERVER_IP=\$(hostname -I | awk '{print \$1}')
+    sudo iptables -t nat -F
+    sudo iptables -t nat -N REDSOCKS 2>/dev/null || echo "Цепочка REDSOCKS уже существует"
+    sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
+    sudo iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+    sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+    sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+}
 
-    /usr/sbin/iptables -t nat -F
-    /usr/sbin/iptables -t nat -N REDSOCKS
+cleanup_iptables() {
+    echo "Очищаю iptables..."
 
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+    # Удаляем правила только если они существуют
+    if sudo iptables -t nat -L REDSOCKS &>/dev/null; then
+        sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
+        sudo iptables -t nat -F REDSOCKS
+        sudo iptables -t nat -X REDSOCKS
+    fi
 
-    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
-    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+    # Полностью очищаем таблицу NAT и восстанавливаем её политику
+    sudo iptables -t nat -F
+    sudo iptables -t nat -P PREROUTING ACCEPT
+    sudo iptables -t nat -P INPUT ACCEPT
+    sudo iptables -t nat -P OUTPUT ACCEPT
+    sudo iptables -t nat -P POSTROUTING ACCEPT
 
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+    echo "iptables восстановлен."
 }
 
 start() {
+    echo "Запускаю Shadowsocks и Redsocks..."
     start_shadowsocks
     start_redsocks
     configure_iptables
@@ -109,26 +123,11 @@ start() {
 }
 
 stop() {
+    echo "Останавливаю Shadowsocks и Redsocks..."
     stop_shadowsocks
     stop_redsocks
-
-    echo "Очищаю iptables..."
-
-    # Удаляем правила, если они существуют
-    if sudo iptables -t nat -L REDSOCKS &>/dev/null; then
-        sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
-        sudo iptables -t nat -F REDSOCKS
-        sudo iptables -t nat -X REDSOCKS
-    fi
-
-    # Восстанавливаем политику по умолчанию для таблицы NAT
-    sudo iptables -t nat -F
-    sudo iptables -t nat -P PREROUTING ACCEPT
-    sudo iptables -t nat -P INPUT ACCEPT
-    sudo iptables -t nat -P OUTPUT ACCEPT
-    sudo iptables -t nat -P POSTROUTING ACCEPT
-
-    echo "iptables восстановлен в исходное состояние."
+    cleanup_iptables
+    echo "Все сервисы остановлены и iptables восстановлен."
 }
 
 restart() {
@@ -158,11 +157,12 @@ main() {
 main "\$@"
 EOF
 
-chmod +x /usr/local/bin/ss_redsocks.sh
+# Делаем скрипт исполняемым
+sudo chmod +x /usr/local/bin/ss_redsocks.sh
 
 # Создание systemd-сервиса
 echo "Создаю systemd-сервис..."
-tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
+sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
@@ -179,9 +179,9 @@ EOF
 
 # Перезагрузка systemd, активация и запуск сервиса
 echo "Активирую и запускаю сервис ss_redsocks..."
-systemctl daemon-reload
-systemctl enable ss_redsocks.service
-systemctl start ss_redsocks.service
+sudo systemctl daemon-reload
+sudo systemctl enable ss_redsocks.service
+sudo systemctl start ss_redsocks.service
 
-echo "Проверка статуса:"
-systemctl status ss_redsocks.service
+# Проверка статуса
+sudo systemctl status ss_redsocks.service
