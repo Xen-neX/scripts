@@ -114,15 +114,21 @@ stop() {
 
     echo "Очищаю iptables..."
 
-    # Удаляем только существующие правила и цепочки
-    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
+    # Удаляем правила, если они существуют
     if sudo iptables -t nat -L REDSOCKS &>/dev/null; then
+        sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
         sudo iptables -t nat -F REDSOCKS
         sudo iptables -t nat -X REDSOCKS
     fi
-    sudo iptables -t nat -F 2>/dev/null || true
 
-    echo "iptables очищен."
+    # Восстанавливаем политику по умолчанию для таблицы NAT
+    sudo iptables -t nat -F
+    sudo iptables -t nat -P PREROUTING ACCEPT
+    sudo iptables -t nat -P INPUT ACCEPT
+    sudo iptables -t nat -P OUTPUT ACCEPT
+    sudo iptables -t nat -P POSTROUTING ACCEPT
+
+    echo "iptables восстановлен в исходное состояние."
 }
 
 restart() {
