@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "Версия 1.2 - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного днс при stop и переустановке"
+echo "Версия 1.2.1 - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного днс при stop и переустановке + --reuse-port --mptcp"
 # Проверяем, запущена ли служба shadowsocks.service
 if systemctl is-active --quiet shadowsocks.service; then
     echo "shadowsocks.service активен. Останавливаю, чтобы восстановить системный DNS..."
@@ -39,7 +39,7 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_ssredir() {
     echo "Запускаю ss-redir..."
-    (ss-redir -s \$SERVER_IP -p \$SERVER_PORT -m chacha20-ietf-poly1305 -k \$SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay -u -T -v </dev/null &>>/var/log/ss-redir.log &)
+    (ss-redir -s \$SERVER_IP -p \$SERVER_PORT -m chacha20-ietf-poly1305 -k \$SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay --reuse-port --mptcp -u -T -v </dev/null &>>/var/log/ss-redir.log &)
 }
 
 stop_ssredir() {
