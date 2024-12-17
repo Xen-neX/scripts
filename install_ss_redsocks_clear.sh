@@ -57,7 +57,6 @@ redudp {
     local_port = 10053;
     ip = 127.0.0.1;
     port = 1080;
-    type = socks5;
     dest_ip = 1.1.1.1;
     dest_port = 53;
     udp_timeout = 30;
