@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Перед началом: если сервис уже запущен, останавливаем его
+if systemctl is-active --quiet ss_redsocks.service; then
+    echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
+    sudo systemctl stop ss_redsocks.service
+fi
+
 echo "Устанавливаю необходимые пакеты..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev redsocks
@@ -66,6 +72,7 @@ sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 YOUR_SERVER_IP="$YOUR_SERVER_IP"
+BACKUP_FILE="/tmp/iptables_backup_$$.save"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -89,8 +96,8 @@ stop_redsocks() {
 
 configure_iptables() {
     echo "Настраиваю iptables..."
-    # Перед добавлением новых правил попробуем удалить старые, если они вдруг остались
-    clean_iptables_silent
+    # Делаем бэкап текущих правил
+    sudo iptables-save > "\$BACKUP_FILE"
 
     # Создаём цепочку REDSOCKS
     sudo iptables -t nat -N REDSOCKS 2>/dev/null
@@ -108,26 +115,14 @@ configure_iptables() {
     sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
-clean_iptables_silent() {
-    # Эта функция удаляет правила молча, чтобы не вызывать ошибок, если их нет
-    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN 2>/dev/null
-    sudo iptables -t nat -F REDSOCKS 2>/dev/null
-    sudo iptables -t nat -X REDSOCKS 2>/dev/null
-}
-
-clean_iptables() {
-    echo "Очищаю iptables правила, добавленные скриптом..."
-    # Удаляем в обратном порядке
-    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN 2>/dev/null
-
-    sudo iptables -t nat -F REDSOCKS 2>/dev/null
-    sudo iptables -t nat -X REDSOCKS 2>/dev/null
+restore_iptables() {
+    echo "Восстанавливаю iptables из бэкапа..."
+    if [ -f "\$BACKUP_FILE" ]; then
+        sudo iptables-restore < "\$BACKUP_FILE"
+        rm "\$BACKUP_FILE"
+    else
+        echo "Файл бэкапа iptables не найден, не могу восстановить!"
+    fi
 }
 
 start() {
@@ -140,8 +135,8 @@ start() {
 stop() {
     stop_shadowsocks
     stop_redsocks
-    clean_iptables
-    echo "Все сервисы остановлены."
+    restore_iptables
+    echo "Все сервисы остановлены и iptables восстановлен."
 }
 
 restart() {
