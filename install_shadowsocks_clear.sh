@@ -1,207 +1,193 @@
 #!/bin/bash
-echo "Версия 1.2.1 - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного днс при stop и переустановке + --reuse-port --mptcp"
-# Проверяем, запущена ли служба shadowsocks.service
-if systemctl is-active --quiet shadowsocks.service; then
-    echo "shadowsocks.service активен. Останавливаю, чтобы восстановить системный DNS..."
-    sudo systemctl stop shadowsocks.service
+
+# Перед запуском: если сервис уже запущен, останавливаем его
+if systemctl is-active --quiet ss_redsocks.service; then
+    echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
+    systemctl stop ss_redsocks.service
 fi
 
-# Теперь, когда служба остановлена (или не была запущена),
-# резольв должен быть системным. Сохраняем системный DNS.
-SYSTEM_DNS="$(cat /etc/resolv.conf)"
+echo "Устанавливаю необходимые пакеты..."
+apt-get update
+apt-get install -y shadowsocks-libev redsocks
 
-echo "Устанавливаю shadowsocks-libev..."
-sudo apt-get update
-sudo apt-get install -y shadowsocks-libev
+# Запрос параметров от пользователя
+read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
+read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
+read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
-# Запрос параметров у пользователя
-read -p "Введите IP-адрес сервера: " SERVER_IP
-read -p "Введите порт сервера: " SERVER_PORT
-read -p "Введите пароль: " SERVER_PASSWORD
+YOUR_SERVER_IP=$(hostname -I | awk '{print $1}')
+BACKUP_FILE="/root/iptables_backup_ss_redsocks.save"
 
-# Запрос пользовательских правил перенаправления
-echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
-echo "Формат: tcp 443 tcp 80 udp 12345"
-echo "Если оставить пустым (нажать Enter), то будет перенаправлен весь трафик"
-read -p "Протоколы и порты: " CUSTOM_RULES
+echo "Создаю конфигурацию Shadowsocks..."
+tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+{
+    "server": "$SERVER_IP",
+    "server_port": $SERVER_PORT,
+    "local_port": 1080,
+    "password": "$SERVER_PASSWORD",
+    "method": "chacha20-ietf-poly1305",
+    "mode": "tcp_and_udp",
+    "fast_open": true
+}
+EOF
 
-# Создание скрипта shadowsocks.sh
-echo "Создаю скрипт shadowsocks.sh..."
-sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+echo "Создаю конфигурацию Redsocks..."
+tee /etc/redsocks.conf > /dev/null <<EOF
+base {
+    log = "file:/var/log/redsocks.log";
+    daemon = on;
+    user = redsocks;
+    group = redsocks;
+    redirector = iptables;
+}
+
+redsocks {
+    local_ip = 127.0.0.1;
+    local_port = 12345;
+    ip = 127.0.0.1;
+    port = 1080;
+    type = socks5;
+}
+
+redudp {
+    local_ip = 127.0.0.1;
+    local_port = 10053;
+    ip = 127.0.0.1;
+    port = 1080;
+    dest_ip = 192.0.2.2;
+    dest_port = 53;
+    udp_timeout = 30;
+    udp_timeout_stream = 180;
+}
+
+dnstc {
+    local_ip = 127.0.0.1;
+    local_port = 5300;
+}
+EOF
+
+echo "Создаю основной скрипт /usr/local/bin/ss_redsocks.sh..."
+tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
-SERVER_PASSWORD="$SERVER_PASSWORD"
-CUSTOM_RULES="$CUSTOM_RULES"
-SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")
-SYSTEM_DNS="\$SYSTEM_DNS"
+YOUR_SERVER_IP="$YOUR_SERVER_IP"
+BACKUP_FILE="$BACKUP_FILE"
 
-start_ssredir() {
-    echo "Запускаю ss-redir..."
-    (ss-redir -s \$SERVER_IP -p \$SERVER_PORT -m chacha20-ietf-poly1305 -k \$SERVER_PASSWORD -b 127.0.0.1 -l 60080 --no-delay --reuse-port --mptcp -u -T -v </dev/null &>>/var/log/ss-redir.log &)
+start_shadowsocks() {
+    echo "Запускаю Shadowsocks..."
+    nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &
 }
 
-stop_ssredir() {
-    echo "Останавливаю ss-redir..."
-    kill -9 \$(pidof ss-redir) &>/dev/null
+stop_shadowsocks() {
+    echo "Останавливаю Shadowsocks..."
+    pkill -x ss-local
 }
 
-start_iptables() {
+start_redsocks() {
+    echo "Запускаю Redsocks..."
+    nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &
+}
+
+stop_redsocks() {
+    echo "Останавливаю Redsocks..."
+    pkill -x redsocks
+}
+
+configure_iptables() {
+    echo "Делаю бэкап iptables в \$BACKUP_FILE"
+    /usr/sbin/iptables-save > "\$BACKUP_FILE" || { echo "Не удалось сделать бэкап iptables!"; exit 1; }
+
     echo "Настраиваю iptables..."
-    iptables -t mangle -N SSREDIR 2>/dev/null
-    iptables -t mangle -F SSREDIR
-    iptables -t mangle -D OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
-    iptables -t mangle -D OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
-    iptables -t mangle -D PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
-    iptables -t mangle -D PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
-    iptables -t mangle -F SSREDIR
-    iptables -t mangle -X SSREDIR
-    iptables -t mangle -N SSREDIR
+    /usr/sbin/iptables -t nat -N REDSOCKS 2>/dev/null
 
-    iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
-    iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
-    # Исключаем сам Shadowsocks сервер
-    iptables -t mangle -A SSREDIR -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
-    iptables -t mangle -A SSREDIR -p udp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
-    # Исключаем локальный трафик
-    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN
 
-    if [ -n "\$CUSTOM_RULES" ]; then
-        PROTO_PORTS=(\$CUSTOM_RULES)
-        COUNT=\${#PROTO_PORTS[@]}
-        i=0
-        while [ \$i -lt \$COUNT ]; do
-            PROTO=\${PROTO_PORTS[\$i]}
-            PORT=\${PROTO_PORTS[\$((i+1))]}
-            i=\$((i+2))
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
 
-            if [ "\$PROTO" = "tcp" ]; then
-                iptables -t mangle -A SSREDIR -p tcp --dport \$PORT -j MARK --set-mark 0x2333
-            elif [ "\$PROTO" = "udp" ]; then
-                iptables -t mangle -A SSREDIR -p udp --dport \$PORT -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-            fi
-        done
-    else
-        # Старое поведение — перенаправляем весь TCP/UDP трафик
-        iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
-        iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-    fi
-
-    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
-
-    # Применяем правила для локального (OUTPUT) и не-локального (PREROUTING) трафика
-    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
-
-    # Применяем TPROXY
-    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
-    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
-}
-
-stop_iptables() {
-    echo "Очищаю iptables..."
-    iptables -t mangle -F SSREDIR &>/dev/null
-    iptables -t mangle -X SSREDIR &>/dev/null
-}
-
-start_iproute2() {
-    echo "Настраиваю iproute2..."
-    ip route add local default dev lo table 100 2>/dev/null
-    ip rule add fwmark 0x2333 table 100 2>/dev/null
-}
-
-stop_iproute2() {
-    echo "Очищаю iproute2..."
-    ip rule del table 100 &>/dev/null
-    ip route flush table 100 &>/dev/null
-}
-
-start_resolvconf() {
-    echo "Настраиваю resolv.conf..."
-    echo "nameserver 1.1.1.1" >/etc/resolv.conf
-}
-
-stop_resolvconf() {
-    echo "Восстанавливаю resolv.conf..."
-    # Восстанавливаем исходное значение DNS
-    echo "\$SYSTEM_DNS" > /etc/resolv.conf
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
 start() {
-    echo "Запуск процесса..."
-    start_ssredir
-    start_iptables
-    start_iproute2
-    start_resolvconf
-    echo "Процесс запущен."
+    start_shadowsocks
+    start_redsocks
+    configure_iptables
+    echo "Все сервисы запущены."
 }
 
 stop() {
-    echo "Остановка процесса..."
-    stop_resolvconf
-    stop_iproute2
-    stop_iptables
-    stop_ssredir
-    echo "Процесс остановлен."
+    stop_shadowsocks
+    stop_redsocks
+    echo "Процессы остановлены. Восстановление iptables будет выполнено ExecStopPost."
 }
 
 restart() {
-    echo "Перезапуск процесса..."
     stop
     sleep 1
     start
 }
 
 main() {
-    echo "Переданы аргументы: \$@"
-    if [ \$# -eq 0 ]; then
-        echo "usage: \$0 start|stop|restart ..."
-        exit 1
-    fi
-
-    for funcname in "\$@"; do
-        if declare -F "\$funcname" > /dev/null; then
-            echo "Выполняется функция: \$funcname"
-            \$funcname
-        else
-            echo "Ошибка: '\$funcname' не является shell-функцией"
+    case "\$1" in
+        start)
+            start
+            ;;
+        stop)
+            stop
+            ;;
+        restart)
+            restart
+            ;;
+        *)
+            echo "Использование: \$0 {start|stop|restart}"
             exit 1
-        fi
-    done
+            ;;
+    esac
 }
 
 main "\$@"
 EOF
 
-# Делаем скрипт исполняемым
-sudo chmod +x /usr/local/bin/shadowsocks.sh
+chmod +x /usr/local/bin/ss_redsocks.sh
 
-# Создание systemd-сервиса
-echo "Создаю systemd-сервис для shadowsocks.sh..."
-sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
+echo "Создаю скрипт восстановления iptables /usr/local/bin/restore_iptables.sh..."
+tee /usr/local/bin/restore_iptables.sh > /dev/null <<EOF
+#!/bin/bash
+if [ -f "$BACKUP_FILE" ]; then
+    echo "Восстанавливаю iptables из \$BACKUP_FILE"
+    cat "$BACKUP_FILE" | /usr/sbin/iptables-restore || echo "Ошибка при восстановлении iptables!"
+    rm "$BACKUP_FILE"
+else
+    echo "Файл бэкапа iptables не найден!"
+fi
+EOF
+
+chmod +x /usr/local/bin/restore_iptables.sh
+
+echo "Создаю systemd-сервис ss_redsocks.service..."
+tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
-Description=Shadowsocks Custom Script
+Description=Shadowsocks + Redsocks Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/shadowsocks.sh start
-ExecStop=/usr/local/bin/shadowsocks.sh stop
-Restart=on-failure
+Type=oneshot
 RemainAfterExit=yes
+ExecStart=/usr/local/bin/ss_redsocks.sh start
+ExecStop=/usr/local/bin/ss_redsocks.sh stop
+ExecStopPost=/usr/local/bin/restore_iptables.sh
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Активируем и запускаем сервис
-echo "Активирую и запускаю сервис shadowsocks.service..."
-sudo systemctl daemon-reload
-sudo systemctl enable shadowsocks.service
-sudo systemctl start shadowsocks.service
+echo "Активирую и запускаю сервис ss_redsocks..."
+systemctl daemon-reload
+systemctl enable ss_redsocks.service
+systemctl start ss_redsocks.service
 
-# Проверка статуса
-echo "Сервис shadowsocks.service запущен. Проверяю статус..."
-sudo systemctl status shadowsocks.service
+echo "Теперь вы можете управлять сервисом через systemctl. При остановке iptables будет восстановлен."
