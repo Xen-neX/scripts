@@ -3,12 +3,12 @@
 # Перед началом: если сервис уже запущен, останавливаем его
 if systemctl is-active --quiet ss_redsocks.service; then
     echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
-    sudo systemctl stop ss_redsocks.service
+    systemctl stop ss_redsocks.service
 fi
 
 echo "Устанавливаю необходимые пакеты..."
-sudo apt-get update
-sudo apt-get install -y shadowsocks-libev redsocks
+apt-get update
+apt-get install -y shadowsocks-libev redsocks
 
 # Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
@@ -18,7 +18,7 @@ read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 YOUR_SERVER_IP=$(hostname -I | awk '{print $1}')
 
 echo "Создаю конфигурацию Shadowsocks..."
-sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
@@ -31,7 +31,7 @@ sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 EOF
 
 echo "Создаю конфигурацию Redsocks..."
-sudo tee /etc/redsocks.conf > /dev/null <<EOF
+tee /etc/redsocks.conf > /dev/null <<EOF
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -66,13 +66,17 @@ dnstc {
 EOF
 
 echo "Создаю скрипт /usr/local/bin/ss_redsocks.sh..."
-sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
+tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 YOUR_SERVER_IP="$YOUR_SERVER_IP"
-BACKUP_FILE="/tmp/iptables_backup_ss_redsocks.save"
+BACKUP_FILE="/var/tmp/iptables_backup_ss_redsocks.save"
+
+/usr/sbin/iptables --version
+/usr/sbin/iptables-save --version
+/usr/sbin/iptables-restore --version
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -96,28 +100,28 @@ stop_redsocks() {
 
 configure_iptables() {
     echo "Делаю бэкап iptables в \$BACKUP_FILE"
-    sudo iptables-save > "\$BACKUP_FILE"
+    /usr/sbin/iptables-save > "\$BACKUP_FILE" || { echo "Не удалось сделать бэкап iptables!"; exit 1; }
 
     echo "Настраиваю iptables..."
-    sudo iptables -t nat -N REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -N REDSOCKS 2>/dev/null
 
     # Исключаем локальный трафик и трафик к Shadowsocks-серверу
-    sudo iptables -t nat -A OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN
-    sudo iptables -t nat -A OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN
-    sudo iptables -t nat -A OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN
 
     # Перенаправляем порты 80 и 443 в цепочку REDSOCKS
-    sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
-    sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
 
     # Направляем весь остальной TCP трафик через REDSOCKS
-    sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
 restore_iptables() {
     echo "Восстанавливаю iptables из бэкапа..."
     if [ -f "\$BACKUP_FILE" ]; then
-        sudo iptables-restore < "\$BACKUP_FILE" || echo "Ошибка при восстановлении iptables!"
+        /usr/sbin/iptables-restore < "\$BACKUP_FILE" || { echo "Ошибка при восстановлении iptables!"; exit 1; }
         rm "\$BACKUP_FILE"
     else
         echo "Файл бэкапа iptables не найден, не могу восстановить!"
@@ -165,10 +169,10 @@ main() {
 main "\$@"
 EOF
 
-sudo chmod +x /usr/local/bin/ss_redsocks.sh
+chmod +x /usr/local/bin/ss_redsocks.sh
 
 echo "Создаю systemd-сервис ss_redsocks.service..."
-sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
+tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
@@ -184,9 +188,9 @@ WantedBy=multi-user.target
 EOF
 
 echo "Активирую и запускаю сервис ss_redsocks..."
-sudo systemctl daemon-reload
-sudo systemctl enable ss_redsocks.service
-sudo systemctl start ss_redsocks.service
+systemctl daemon-reload
+systemctl enable ss_redsocks.service
+systemctl start ss_redsocks.service
 
 echo "Проверка статуса:"
-sudo systemctl status ss_redsocks.service
+systemctl status ss_redsocks.service
