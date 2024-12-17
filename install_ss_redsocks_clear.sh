@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Перед началом: если сервис уже запущен, останавливаем его
+# Перед запуском: если сервис уже запущен, останавливаем его
 if systemctl is-active --quiet ss_redsocks.service; then
     echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
     systemctl stop ss_redsocks.service
@@ -10,12 +10,13 @@ echo "Устанавливаю необходимые пакеты..."
 apt-get update
 apt-get install -y shadowsocks-libev redsocks
 
-# Запрос параметров
+# Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
 read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
 YOUR_SERVER_IP=$(hostname -I | awk '{print $1}')
+BACKUP_FILE="/root/iptables_backup_ss_redsocks.save"
 
 echo "Создаю конфигурацию Shadowsocks..."
 tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
@@ -65,9 +66,7 @@ dnstc {
 }
 EOF
 
-BACKUP_FILE="/var/tmp/iptables_backup_ss_redsocks.save"
-
-echo "Создаю скрипт /usr/local/bin/ss_redsocks.sh..."
+echo "Создаю основной скрипт /usr/local/bin/ss_redsocks.sh..."
 tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
@@ -155,12 +154,12 @@ EOF
 
 chmod +x /usr/local/bin/ss_redsocks.sh
 
-echo "Создаю скрипт для восстановления iptables /usr/local/bin/restore_iptables.sh..."
+echo "Создаю скрипт восстановления iptables /usr/local/bin/restore_iptables.sh..."
 tee /usr/local/bin/restore_iptables.sh > /dev/null <<EOF
-#!/bin/sh
+#!/bin/bash
 if [ -f "$BACKUP_FILE" ]; then
     echo "Восстанавливаю iptables из \$BACKUP_FILE"
-    /usr/sbin/iptables-restore < "$BACKUP_FILE" || echo "Ошибка при восстановлении iptables!"
+    cat "$BACKUP_FILE" | /usr/sbin/iptables-restore || echo "Ошибка при восстановлении iptables!"
     rm "$BACKUP_FILE"
 else
     echo "Файл бэкапа iptables не найден!"
@@ -191,4 +190,4 @@ systemctl daemon-reload
 systemctl enable ss_redsocks.service
 systemctl start ss_redsocks.service
 
-echo "Теперь при остановке сервиса (systemctl stop ss_redsocks.service) iptables будет восстанавливаться через ExecStopPost."
+echo "Теперь вы можете управлять сервисом через systemctl. При остановке iptables будет восстановлен."
