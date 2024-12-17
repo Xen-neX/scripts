@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Перед началом: если сервис уже запущен, останавливаем его, чтобы восстановить DNS и очистить iptables.
+# Перед началом: если сервис уже запущен, останавливаем его.
 if systemctl is-active --quiet ss_redsocks.service; then
     echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
     systemctl stop ss_redsocks.service
@@ -32,10 +32,7 @@ tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "password": "$SERVER_PASSWORD",
     "method": "chacha20-ietf-poly1305",
     "mode": "tcp_and_udp",
-    "fast_open": true,
-    "no-delay": true,
-    "mptcp": true,
-    "reuse-port": true
+    "fast_open": true
 }
 EOF
 
@@ -86,7 +83,6 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
-    # Добавляем -u, чтобы ss-local принимал и UDP
     (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
 }
 
@@ -122,13 +118,11 @@ configure_iptables() {
     /usr/sbin/iptables -t nat -F
     /usr/sbin/iptables -t nat -N REDSOCKS 2>/dev/null
 
-    # Исключаем локальный трафик и трафик к Shadowsocks-серверу
     /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
     /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
     /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
 
     if [ -n "\$CUSTOM_RULES" ]; then
-        # Пользователь указал протоколы и порты
         PROTO_PORTS=(\$CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
         i=0
@@ -144,20 +138,15 @@ configure_iptables() {
             fi
         done
 
-        # Применяем правила для TCP
         /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-        # Применяем правила для UDP (только заданные порты)
         /usr/sbin/iptables -t nat -A OUTPUT -p udp -j REDSOCKS
     else
-        # Нет пользовательских правил:
-        # Перенаправляем весь TCP-трафик
+        # Весь TCP и только UDP/53
         /usr/sbin/iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
         /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 
-        # Перенаправляем только UDP/53 для DNS
         /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
         /usr/sbin/iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
-        # Остальной UDP не трогаем
     fi
 }
 
