@@ -53,7 +53,6 @@ redudp {
     local_port = 10053;
     ip = 127.0.0.1;
     port = 1080;
-    # Не указываем type, чтобы избежать ошибок.
     dest_ip = 1.1.1.1;
     dest_port = 53;
     udp_timeout = 30;
