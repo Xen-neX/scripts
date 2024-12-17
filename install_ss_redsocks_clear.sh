@@ -113,12 +113,16 @@ stop() {
     stop_redsocks
 
     echo "Очищаю iptables..."
-    /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -F 2>/dev/null
 
-    echo "Все сервисы остановлены и iptables восстановлен."
+    # Удаляем только существующие правила и цепочки
+    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
+    if sudo iptables -t nat -L REDSOCKS &>/dev/null; then
+        sudo iptables -t nat -F REDSOCKS
+        sudo iptables -t nat -X REDSOCKS
+    fi
+    sudo iptables -t nat -F 2>/dev/null || true
+
+    echo "iptables очищен."
 }
 
 restart() {
