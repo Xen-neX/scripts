@@ -1,14 +1,16 @@
+Вот скрипт. При остановке ss_redsocks.service ошибка:
+root@tavscwxxmo:~# curl ifconfig.io
+curl: (7) Failed to connect to ifconfig.io port 80 after 1 ms: Couldn't connect to serve
+
 #!/bin/bash
 # Установка необходимых пакетов
 echo "Устанавливаю необходимые пакеты..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev redsocks
-
 # Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
 read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
-
 # Создание конфигурационного файла Shadowsocks
 echo "Создаю конфигурацию Shadowsocks..."
 sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
@@ -22,7 +24,6 @@ sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "fast_open": true
 }
 EOF
-
 # Создание конфигурационного файла Redsocks
 echo "Создаю конфигурацию Redsocks..."
 sudo tee /etc/redsocks.conf > /dev/null <<EOF
@@ -55,37 +56,31 @@ dnstc {
     local_port = 5300;
 }
 EOF
-
 # Создание скрипта для запуска Shadowsocks и Redsocks
 echo "Создаю скрипт для запуска Shadowsocks и Redsocks..."
 sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
-
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
     nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &
 }
-
 stop_shadowsocks() {
     echo "Останавливаю Shadowsocks..."
     pkill -f ss-local
 }
-
 start_redsocks() {
     echo "Запускаю Redsocks..."
     nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &
 }
-
 stop_redsocks() {
     echo "Останавливаю Redsocks..."
     pkill -f redsocks
 }
-
 configure_iptables() {
     echo "Настраиваю iptables..."
     YOUR_SERVER_IP=\$(hostname -I | awk '{print \$1}')
     sudo iptables -t nat -F
-    sudo iptables -t nat -N REDSOCKS 2>/dev/null || echo "Цепочка REDSOCKS уже существует"
+    sudo iptables -t nat -N REDSOCKS
     sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
     sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
     sudo iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
@@ -93,49 +88,32 @@ configure_iptables() {
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
     sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
-
-cleanup_iptables() {
-    echo "Очищаю iptables..."
-
-    # Удаляем правила только если они существуют
-    if sudo iptables -t nat -L REDSOCKS &>/dev/null; then
-        sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null || true
-        sudo iptables -t nat -F REDSOCKS
-        sudo iptables -t nat -X REDSOCKS
-    fi
-
-    # Полностью очищаем таблицу NAT и восстанавливаем её политику
-    sudo iptables -t nat -F
-    sudo iptables -t nat -P PREROUTING ACCEPT
-    sudo iptables -t nat -P INPUT ACCEPT
-    sudo iptables -t nat -P OUTPUT ACCEPT
-    sudo iptables -t nat -P POSTROUTING ACCEPT
-
-    echo "iptables восстановлен."
-}
-
 start() {
-    echo "Запускаю Shadowsocks и Redsocks..."
     start_shadowsocks
     start_redsocks
     configure_iptables
     echo "Все сервисы запущены."
 }
-
 stop() {
-    echo "Останавливаю Shadowsocks и Redsocks..."
+    # СНАЧАЛА очищаем и удаляем правила iptables
+    if iptables -t nat -L REDSOCKS > /dev/null 2>&1; then
+    # Цепочка существует, можно удалять
+    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS
+    sudo iptables -t nat -F REDSOCKS
+    sudo iptables -t nat -X REDSOCKS
+fi
+
+    # ПОТОМ останавливаем сервисы
     stop_shadowsocks
     stop_redsocks
-    cleanup_iptables
+
     echo "Все сервисы остановлены и iptables восстановлен."
 }
-
 restart() {
     stop
     sleep 1
     start
 }
-
 main() {
     case "\$1" in
         start)
@@ -153,35 +131,35 @@ main() {
             ;;
     esac
 }
-
 main "\$@"
 EOF
-
 # Делаем скрипт исполняемым
 sudo chmod +x /usr/local/bin/ss_redsocks.sh
-
 # Создание systemd-сервиса
 echo "Создаю systemd-сервис..."
 sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
-
 [Service]
 ExecStart=/usr/local/bin/ss_redsocks.sh start
 ExecStop=/usr/local/bin/ss_redsocks.sh stop
 Restart=on-failure
 RemainAfterExit=yes
-
 [Install]
 WantedBy=multi-user.target
 EOF
-
 # Перезагрузка systemd, активация и запуск сервиса
 echo "Активирую и запускаю сервис ss_redsocks..."
 sudo systemctl daemon-reload
 sudo systemctl enable ss_redsocks.service
 sudo systemctl start ss_redsocks.service
-
 # Проверка статуса
 sudo systemctl status ss_redsocks.service
+
+Когда я ввожу вручную, то всё работает:
+
+    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
+    sudo iptables -t nat -F REDSOCKS 2>/dev/null
+    sudo iptables -t nat -X REDSOCKS 2>/dev/null
+    sudo iptables -t nat -F 2>/dev/null
