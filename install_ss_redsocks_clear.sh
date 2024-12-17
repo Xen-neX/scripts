@@ -32,7 +32,10 @@ tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "password": "$SERVER_PASSWORD",
     "method": "chacha20-ietf-poly1305",
     "mode": "tcp_and_udp",
-    "fast_open": true
+    "fast_open": true,
+    "no-delay": true,
+    "mptcp": true,
+    "reuse-port": true
 }
 EOF
 
