@@ -72,7 +72,7 @@ sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 YOUR_SERVER_IP="$YOUR_SERVER_IP"
-BACKUP_FILE="/tmp/iptables_backup_$$.save"
+BACKUP_FILE="/tmp/iptables_backup_ss_redsocks.save"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
@@ -95,11 +95,10 @@ stop_redsocks() {
 }
 
 configure_iptables() {
-    echo "Настраиваю iptables..."
-    # Делаем бэкап текущих правил
+    echo "Делаю бэкап iptables в \$BACKUP_FILE"
     sudo iptables-save > "\$BACKUP_FILE"
 
-    # Создаём цепочку REDSOCKS
+    echo "Настраиваю iptables..."
     sudo iptables -t nat -N REDSOCKS 2>/dev/null
 
     # Исключаем локальный трафик и трафик к Shadowsocks-серверу
@@ -118,7 +117,7 @@ configure_iptables() {
 restore_iptables() {
     echo "Восстанавливаю iptables из бэкапа..."
     if [ -f "\$BACKUP_FILE" ]; then
-        sudo iptables-restore < "\$BACKUP_FILE"
+        sudo iptables-restore < "\$BACKUP_FILE" || echo "Ошибка при восстановлении iptables!"
         rm "\$BACKUP_FILE"
     else
         echo "Файл бэкапа iptables не найден, не могу восстановить!"
