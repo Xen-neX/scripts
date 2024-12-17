@@ -1,15 +1,17 @@
 #!/bin/bash
 # Установка необходимых пакетов
 echo "Устанавливаю необходимые пакеты..."
-sudo apt-get update
-sudo apt-get install -y shadowsocks-libev redsocks
+apt-get update
+apt-get install -y shadowsocks-libev redsocks
+
 # Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
 read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
+
 # Создание конфигурационного файла Shadowsocks
 echo "Создаю конфигурацию Shadowsocks..."
-sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
@@ -20,9 +22,10 @@ sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "fast_open": true
 }
 EOF
+
 # Создание конфигурационного файла Redsocks
 echo "Создаю конфигурацию Redsocks..."
-sudo tee /etc/redsocks.conf > /dev/null <<EOF
+tee /etc/redsocks.conf > /dev/null <<EOF
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -52,70 +55,78 @@ dnstc {
     local_port = 5300;
 }
 EOF
+
 # Создание скрипта для запуска Shadowsocks и Redsocks
 echo "Создаю скрипт для запуска Shadowsocks и Redsocks..."
-sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
+tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
+
+SERVER_IP="$SERVER_IP"
+SERVER_PORT="$SERVER_PORT"
+
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
     nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &
 }
+
 stop_shadowsocks() {
     echo "Останавливаю Shadowsocks..."
     pkill -f ss-local
 }
+
 start_redsocks() {
     echo "Запускаю Redsocks..."
     nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &
 }
+
 stop_redsocks() {
     echo "Останавливаю Redsocks..."
     pkill -f redsocks
 }
+
 configure_iptables() {
     echo "Настраиваю iptables..."
     YOUR_SERVER_IP=\$(hostname -I | awk '{print \$1}')
-    sudo iptables -t nat -F
-    sudo iptables -t nat -N REDSOCKS
-    sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
-    sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
-    sudo iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
-    sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+
+    /usr/sbin/iptables -t nat -F
+    /usr/sbin/iptables -t nat -N REDSOCKS
+
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d $SERVER_IP --dport $SERVER_PORT -j RETURN
+
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+    /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
+
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
+
 start() {
     start_shadowsocks
     start_redsocks
     configure_iptables
     echo "Все сервисы запущены."
 }
+
 stop() {
     stop_shadowsocks
     stop_redsocks
 
-    # Удаляем переходы на цепочку REDSOCKS из OUTPUT
-    iptables -t nat -D OUTPUT -p tcp -j REDSOCKS &>/dev/null
-
-    # Очищаем цепочку REDSOCKS
-    iptables -t nat -F REDSOCKS &>/dev/null
-
-    # Удаляем цепочку REDSOCKS
-    iptables -t nat -X REDSOCKS &>/dev/null
-
-    # Финально очищаем таблицу nat
-    iptables -t nat -F &>/dev/null
+    echo "Очищаю iptables..."
+    /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
+    /usr/sbin/iptables -t nat -F 2>/dev/null
 
     echo "Все сервисы остановлены и iptables восстановлен."
-
-
-
 }
+
 restart() {
     stop
     sleep 1
     start
 }
+
 main() {
     case "\$1" in
         start)
@@ -133,28 +144,34 @@ main() {
             ;;
     esac
 }
+
 main "\$@"
 EOF
-# Делаем скрипт исполняемым
-sudo chmod +x /usr/local/bin/ss_redsocks.sh
+
+chmod +x /usr/local/bin/ss_redsocks.sh
+
 # Создание systemd-сервиса
 echo "Создаю systemd-сервис..."
-sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
+tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
+
 [Service]
 ExecStart=/usr/local/bin/ss_redsocks.sh start
 ExecStop=/usr/local/bin/ss_redsocks.sh stop
 Restart=on-failure
 RemainAfterExit=yes
+
 [Install]
 WantedBy=multi-user.target
 EOF
+
 # Перезагрузка systemd, активация и запуск сервиса
 echo "Активирую и запускаю сервис ss_redsocks..."
-sudo systemctl daemon-reload
-sudo systemctl enable ss_redsocks.service
-sudo systemctl start ss_redsocks.service
-# Проверка статуса
-sudo systemctl status ss_redsocks.service
+systemctl daemon-reload
+systemctl enable ss_redsocks.service
+systemctl start ss_redsocks.service
+
+echo "Проверка статуса:"
+systemctl status ss_redsocks.service
