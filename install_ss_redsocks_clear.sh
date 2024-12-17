@@ -1,8 +1,14 @@
 #!/bin/bash
 
+# Перед началом: если сервис уже запущен, останавливаем его, чтобы восстановить DNS и очистить iptables.
+if systemctl is-active --quiet ss_redsocks.service; then
+    echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
+    systemctl stop ss_redsocks.service
+fi
+
 echo "Устанавливаю необходимые пакеты..."
-sudo apt-get update
-sudo apt-get install -y shadowsocks-libev redsocks
+apt-get update
+apt-get install -y shadowsocks-libev redsocks
 
 # Запрос параметров для Shadowsocks
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
@@ -10,7 +16,7 @@ read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
 # Запрос правил перенаправления
-echo "Укажите протоколы и порты для перенаправления (например: tcp 443 tcp 80 udp 12345)."
+echo "Укажите протоколы и порты для перенаправления (например: tcp 443 tcp 80 udp 53)."
 echo "Если оставить пустым, будет перенаправляться весь TCP-трафик и только UDP/53 для DNS."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
@@ -18,7 +24,7 @@ read -p "Протоколы и порты: " CUSTOM_RULES
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
 echo "Создаю конфигурацию Shadowsocks..."
-sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
@@ -26,12 +32,15 @@ sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
     "password": "$SERVER_PASSWORD",
     "method": "chacha20-ietf-poly1305",
     "mode": "tcp_and_udp",
-    "fast_open": true
+    "fast_open": true,
+    "no-delay": true,
+    "mptcp": true,
+    "reuse-port": true
 }
 EOF
 
 echo "Создаю конфигурацию Redsocks..."
-sudo tee /etc/redsocks.conf > /dev/null <<EOF
+tee /etc/redsocks.conf > /dev/null <<EOF
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -66,7 +75,7 @@ dnstc {
 EOF
 
 echo "Создаю скрипт запуска/остановки /usr/local/bin/ss_redsocks.sh..."
-sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
+tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 SERVER_IP="$SERVER_IP"
@@ -77,6 +86,7 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
+    # Добавляем -u, чтобы ss-local принимал и UDP
     (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
 }
 
@@ -147,18 +157,15 @@ configure_iptables() {
         # Перенаправляем только UDP/53 для DNS
         /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
         /usr/sbin/iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
-        # Остальной UDP не перенаправляется, поэтому ничего не делаем для всего остального UDP.
+        # Остальной UDP не трогаем
     fi
 }
 
 clear_iptables() {
     echo "Очищаю iptables..."
-    # Удаляем правила для TCP
     /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    # Пытаемся удалить правило для UDP
     /usr/sbin/iptables -t nat -D OUTPUT -p udp --dport 53 -j REDSOCKS 2>/dev/null
     /usr/sbin/iptables -t nat -D OUTPUT -p udp -j REDSOCKS 2>/dev/null
-
     /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
     /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
     /usr/sbin/iptables -t nat -F 2>/dev/null
@@ -207,10 +214,10 @@ main() {
 main "\$@"
 EOF
 
-sudo chmod +x /usr/local/bin/ss_redsocks.sh
+chmod +x /usr/local/bin/ss_redsocks.sh
 
 echo "Создаю systemd-сервис ss_redsocks.service..."
-sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
+tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
 After=network.target
@@ -226,9 +233,9 @@ WantedBy=multi-user.target
 EOF
 
 echo "Активирую и запускаю сервис ss_redsocks..."
-sudo systemctl daemon-reload
-sudo systemctl enable ss_redsocks.service
-sudo systemctl start ss_redsocks.service
+systemctl daemon-reload
+systemctl enable ss_redsocks.service
+systemctl start ss_redsocks.service
 
-echo "Проверка статуса..."
-sudo systemctl status ss_redsocks.service
+echo "Проверка статуса:"
+systemctl status ss_redsocks.service
