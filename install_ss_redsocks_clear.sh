@@ -3,12 +3,13 @@
 # Перед началом: если сервис уже запущен, останавливаем его.
 if systemctl is-active --quiet ss_redsocks.service; then
     echo "Обнаружен запущенный сервис ss_redsocks.service. Останавливаю..."
-    systemctl stop ss_redsocks.service
+    sudo systemctl stop ss_redsocks.service
+    sleep 2 # Даем время сервису остановиться
 fi
 
 echo "Устанавливаю необходимые пакеты..."
-apt-get update
-apt-get install -y shadowsocks-libev redsocks
+sudo apt-get update
+sudo apt-get install -y shadowsocks-libev redsocks iptables iproute2
 
 # Запрос параметров для Shadowsocks
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
@@ -24,13 +25,13 @@ read -p "Протоколы и порты: " CUSTOM_RULES
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
 echo "Создаю конфигурацию Shadowsocks..."
-tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
+sudo tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 {
     "server": "$SERVER_IP",
     "server_port": $SERVER_PORT,
     "local_port": 1080,
     "password": "$SERVER_PASSWORD",
-    "method": "chacha20-ietf-poly1305",
+    "method": "chacha20-ietf-poly1305", # Или другой метод
     "mode": "tcp_and_udp",
     "fast_open": true,
     "no_delay": true,
@@ -40,7 +41,7 @@ tee /etc/shadowsocks-libev/config.json > /dev/null <<EOF
 EOF
 
 echo "Создаю конфигурацию Redsocks..."
-tee /etc/redsocks.conf > /dev/null <<EOF
+sudo tee /etc/redsocks.conf > /dev/null <<EOF
 base {
     log = "file:/var/log/redsocks.log";
     daemon = on;
@@ -62,7 +63,7 @@ redudp {
     local_port = 10053;
     ip = 127.0.0.1;
     port = 1080;
-    dest_ip = 1.1.1.1;
+    dest_ip = 1.1.1.1; # Или другой DNS сервер
     dest_port = 53;
     udp_timeout = 30;
     udp_timeout_stream = 180;
@@ -75,98 +76,93 @@ dnstc {
 EOF
 
 echo "Создаю скрипт запуска/остановки /usr/local/bin/ss_redsocks.sh..."
-tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
+sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
-CUSTOM_RULES="$CUSTOM_RULES"
-SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")
-SYSTEM_DNS="\$SYSTEM_DNS"
-
-start_shadowsocks() {
-    echo "Запускаю Shadowsocks..."
-    (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
-}
-
-stop_shadowsocks() {
-    echo "Останавливаю Shadowsocks..."
-    pkill -f ss-local
-}
-
-start_redsocks() {
-    echo "Запускаю Redsocks..."
-    (nohup redsocks -c /etc/redsocks.conf &>/var/log/redsocks.log &)
-}
-
-stop_redsocks() {
-    echo "Останавливаю Redsocks..."
-    pkill -f redsocks
-}
-
-start_resolvconf() {
-    echo "Настраиваю DNS на публичный (1.1.1.1)..."
-    echo "nameserver 1.1.1.1" > /etc/resolv.conf
-}
-
-stop_resolvconf() {
-    echo "Восстанавливаю исходный resolv.conf..."
-    echo "\$SYSTEM_DNS" > /etc/resolv.conf
-}
-
-configure_iptables() {
-    echo "Настраиваю iptables..."
-    YOUR_SERVER_IP=\$(hostname -I | awk '{print \$1}')
-
-    /usr/sbin/iptables -t nat -F
-    /usr/sbin/iptables -t nat -N REDSOCKS 2>/dev/null
-
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
-
-    if [ -n "\$CUSTOM_RULES" ]; then
-        PROTO_PORTS=(\$CUSTOM_RULES)
-        COUNT=\${#PROTO_PORTS[@]}
-        i=0
-        while [ \$i -lt \$COUNT ]; do
-            PROTO=\${PROTO_PORTS[\$i]}
-            PORT=\${PROTO_PORTS[\$((i+1))]}
-            i=\$((i+2))
+CUSTOM_RULES="<span class="math-inline">CUSTOM\_RULES"
+SYSTEM\_DNS\=</span>(printf %q "<span class="math-inline">SYSTEM\_DNS"\)
+SYSTEM\_DNS\="\\$SYSTEM\_DNS"
+start\_shadowsocks\(\) \{
+echo "Запускаю Shadowsocks\.\.\."
+\(nohup ss\-local \-u \-c /etc/shadowsocks\-libev/config\.json &\>/var/log/shadowsocks\.log &\)
+sleep 2
+\}
+stop\_shadowsocks\(\) \{
+echo "Останавливаю Shadowsocks\.\.\."
+pkill \-f ss\-local
+\}
+start\_redsocks\(\) \{
+echo "Запускаю Redsocks\.\.\."
+\# Проверяем, не запущен ли redsocks уже
+if pgrep \-x "redsocks" \>/dev/null; then
+echo "Redsocks уже запущен\. Пропускаем запуск\."
+return 0
+fi
+\(nohup redsocks \-c /etc/redsocks\.conf &\>/var/log/redsocks\.log &\)
+sleep 2
+\}
+stop\_redsocks\(\) \{
+echo "Останавливаю Redsocks\.\.\."
+pkill \-f redsocks
+\}
+start\_resolvconf\(\) \{
+echo "Настраиваю DNS на публичный \(1\.1\.1\.1\)\.\.\."
+echo "nameserver 1\.1\.1\.1" \> /etc/resolv\.conf
+\}
+stop\_resolvconf\(\) \{
+echo "Восстанавливаю исходный resolv\.conf\.\.\."
+echo "\\$SYSTEM\_DNS" \> /etc/resolv\.conf
+\}
+configure\_iptables\(\) \{
+echo "Настраиваю iptables\.\.\."
+YOUR\_SERVER\_IP\=\\$\(hostname \-I \| awk '\{print \\$1\}'\)
+sudo iptables \-t nat \-F
+sudo iptables \-t nat \-X REDSOCKS 2\>/dev/null
+sudo iptables \-t nat \-N REDSOCKS
+sudo iptables \-t nat \-A OUTPUT \-p tcp \-d 127\.0\.0\.0/8 \-j RETURN
+sudo iptables \-t nat \-A OUTPUT \-p tcp \-d \\$YOUR\_SERVER\_IP \-j RETURN
+sudo iptables \-t nat \-A OUTPUT \-p tcp \-d \\$SERVER\_IP \-\-dport \\$SERVER\_PORT \-j RETURN
+if \[ \-n "\\$CUSTOM\_RULES" \]; then
+PROTO\_PORTS\=\(\\$CUSTOM\_RULES\)
+COUNT\=\\$\{\#PROTO\_PORTS\[@\]\}
+i\=0
+while \[ \\$i \-lt \\$COUNT \]; do
+PROTO\=\\$\{PROTO\_PORTS\[\\$i\]\}
+PORT\=\\$\{PROTO\_PORTS\[\\$\(\(i\+1\)\)\]\}
+i\=\\</span>((i+2))
 
             if [ "\$PROTO" = "tcp" ]; then
-                /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport \$PORT -j REDIRECT --to-ports 12345
+                sudo iptables -t nat -A REDSOCKS -p tcp --dport \$PORT -j REDIRECT --to-ports 12345
             elif [ "\$PROTO" = "udp" ]; then
-                /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport \$PORT -j REDIRECT --to-ports 10053
+                sudo iptables -t nat -A REDSOCKS -p udp --dport \$PORT -j REDIRECT --to-ports 10053
             fi
         done
 
-        /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-        /usr/sbin/iptables -t nat -A OUTPUT -p udp -j REDSOCKS
+        sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+        sudo iptables -t nat -A OUTPUT -p udp -j REDSOCKS
     else
         # Весь TCP и только UDP/53
-        /usr/sbin/iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
-        /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
+        sudo iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
+        sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 
-        /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
-        /usr/sbin/iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
+        sudo iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
+        sudo iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
     fi
 }
 
 clear_iptables() {
     echo "Очищаю iptables..."
-    /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -D OUTPUT -p udp --dport 53 -j REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -D OUTPUT -p udp -j REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -F 2>/dev/null
+    sudo iptables -t nat -F REDSOCKS 2>/dev/null
+    sudo iptables -t nat -X REDSOCKS 2>/dev/null
+    sudo iptables -t nat -F 2>/dev/null
 }
 
 start() {
     start_shadowsocks
     start_redsocks
-    # Сначала запускаем процессы, затем применяем iptables
+    sleep 3 # Дополнительная задержка
     configure_iptables
     start_resolvconf
     echo "Все сервисы запущены."
@@ -198,37 +194,4 @@ main() {
             restart
             ;;
         *)
-            echo "Использование: \$0 {start|stop|restart}"
-            exit 1
-            ;;
-    esac
-}
-
-main "\$@"
-EOF
-
-chmod +x /usr/local/bin/ss_redsocks.sh
-
-echo "Создаю systemd-сервис ss_redsocks.service..."
-tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
-[Unit]
-Description=Shadowsocks + Redsocks Service
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/ss_redsocks.sh start
-ExecStop=/usr/local/bin/ss_redsocks.sh stop
-Restart=on-failure
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-echo "Активирую и запускаю сервис ss_redsocks..."
-systemctl daemon-reload
-systemctl enable ss_redsocks.service
-systemctl start ss_redsocks.service
-
-echo "Проверка статуса:"
-systemctl status ss_redsocks.service
+            echo "Использование: \$0 {start|stop|
