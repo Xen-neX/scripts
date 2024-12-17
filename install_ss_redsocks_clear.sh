@@ -63,7 +63,7 @@ redudp {
     local_port = 10053;
     ip = 127.0.0.1;
     port = 1080;
-    dest_ip = 1.1.1.1; # Или другой DNS сервер
+    dest_ip = 1.1.1.1;
     dest_port = 53;
     udp_timeout = 30;
     udp_timeout_stream = 180;
@@ -131,67 +131,69 @@ i\=0
 while \[ \\$i \-lt \\$COUNT \]; do
 PROTO\=\\$\{PROTO\_PORTS\[\\$i\]\}
 PORT\=\\$\{PROTO\_PORTS\[\\$\(\(i\+1\)\)\]\}
-i\=\\</span>((i+2))
+i\=\\$\(\(i\+2\)\)
+if \[ "\\$PROTO" \= "tcp" \]; then
+sudo iptables \-t nat \-A REDSOCKS \-p tcp \-\-dport \\$PORT \-j REDIRECT \-\-to\-ports 12345
+elif \[ "\\$PROTO" \= "udp" \]; then
+sudo iptables \-t nat \-A REDSOCKS \-p udp \-\-dport \\$PORT \-j REDIRECT \-\-to\-ports 10053
+fi
+done
+sudo iptables \-t nat \-A OUTPUT \-p tcp \-j REDSOCKS
+sudo iptables \-t nat \-A OUTPUT \-p udp \-j REDSOCKS
+else
+\# Весь TCP и только UDP/53
+sudo iptables \-t nat \-A REDSOCKS \-p tcp \-j REDIRECT \-\-to\-ports 12345
+sudo iptables \-t nat \-A OUTPUT \-p tcp \-j REDSOCKS
+sudo iptables \-t nat \-A REDSOCKS \-p udp \-\-dport 53 \-j REDIRECT \-\-to\-ports 10053
+sudo iptables \-t nat \-A OUTPUT \-p udp \-\-dport 53 \-j REDSOCKS
+fi
+\}
+clear\_iptables\(\) \{
+echo "Очищаю iptables\.\.\."
+sudo iptables \-t nat \-F REDSOCKS 2\>/dev/null
+sudo iptables \-t nat \-X REDSOCKS 2\>/dev/null
+sudo iptables \-t nat \-F 2\>/dev/null
+\}
+start\(\) \{
+start\_shadowsocks
+start\_redsocks
+sleep 3
+configure\_iptables
+start\_resolvconf
+echo "Все сервисы запущены\."
+\}
+stop\(\) \{
+clear\_iptables
+stop\_resolvconf
+stop\_shadowsocks
+stop\_redsocks
+echo "Все сервисы остановлены и iptables восстановлен\."
+\}
+restart\(\) \{
+stop
+sleep 1
+start
+\}
+main\(\) \{
+case "\\$1" in
+start\)
+start
+;;
+stop\)
+stop
+;;
+restart\)
+restart
+;;
+\*\)
+echo "Использование\: \\$0 \{start\|stop\|restart\}"
+exit 1
+;;
+esac
+\}
+main "</span>@"
+EOF
 
-            if [ "\$PROTO" = "tcp" ]; then
-                sudo iptables -t nat -A REDSOCKS -p tcp --dport \$PORT -j REDIRECT --to-ports 12345
-            elif [ "\$PROTO" = "udp" ]; then
-                sudo iptables -t nat -A REDSOCKS -p udp --dport \$PORT -j REDIRECT --to-ports 10053
-            fi
-        done
+sudo chmod +x /usr/local/bin/ss_redsocks.sh
 
-        sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-        sudo iptables -t nat -A OUTPUT -p udp -j REDSOCKS
-    else
-        # Весь TCP и только UDP/53
-        sudo iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
-        sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-
-        sudo iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
-        sudo iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
-    fi
-}
-
-clear_iptables() {
-    echo "Очищаю iptables..."
-    sudo iptables -t nat -F REDSOCKS 2>/dev/null
-    sudo iptables -t nat -X REDSOCKS 2>/dev/null
-    sudo iptables -t nat -F 2>/dev/null
-}
-
-start() {
-    start_shadowsocks
-    start_redsocks
-    sleep 3 # Дополнительная задержка
-    configure_iptables
-    start_resolvconf
-    echo "Все сервисы запущены."
-}
-
-stop() {
-    clear_iptables
-    stop_resolvconf
-    stop_shadowsocks
-    stop_redsocks
-    echo "Все сервисы остановлены и iptables восстановлен."
-}
-
-restart() {
-    stop
-    sleep 1
-    start
-}
-
-main() {
-    case "\$1" in
-        start)
-            start
-            ;;
-        stop)
-            stop
-            ;;
-        restart)
-            restart
-            ;;
-        *)
-            echo "Использование: \$0 {start|stop|
+echo "Создаю systemd-сервис ss_redsocks.service
