@@ -9,7 +9,6 @@ read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
 read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
-# Определяем IP-адрес машины (используется для исключения собственного трафика из редиректа)
 YOUR_SERVER_IP=$(hostname -I | awk '{print $1}')
 
 echo "Создаю конфигурацию Shadowsocks..."
@@ -90,12 +89,16 @@ stop_redsocks() {
 
 configure_iptables() {
     echo "Настраиваю iptables..."
+    # Перед добавлением новых правил попробуем удалить старые, если они вдруг остались
+    clean_iptables_silent
+
+    # Создаём цепочку REDSOCKS
     sudo iptables -t nat -N REDSOCKS 2>/dev/null
 
     # Исключаем локальный трафик и трафик к Shadowsocks-серверу
-    sudo iptables -t nat -A OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN
-    sudo iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+    sudo iptables -t nat -A OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN
+    sudo iptables -t nat -A OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN
+    sudo iptables -t nat -A OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN
 
     # Перенаправляем порты 80 и 443 в цепочку REDSOCKS
     sudo iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
@@ -105,18 +108,24 @@ configure_iptables() {
     sudo iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
+clean_iptables_silent() {
+    # Эта функция удаляет правила молча, чтобы не вызывать ошибок, если их нет
+    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN 2>/dev/null
+    sudo iptables -t nat -F REDSOCKS 2>/dev/null
+    sudo iptables -t nat -X REDSOCKS 2>/dev/null
+}
+
 clean_iptables() {
     echo "Очищаю iptables правила, добавленные скриптом..."
-
-    # Удаляем главный переход из OUTPUT в REDSOCKS
+    # Удаляем в обратном порядке
     sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d \$SERVER_IP -p tcp --dport \$SERVER_PORT -j RETURN 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d \$YOUR_SERVER_IP -p tcp -j RETURN 2>/dev/null
+    sudo iptables -t nat -D OUTPUT -d 127.0.0.0/8 -p tcp -j RETURN 2>/dev/null
 
-    # Удаляем правила, исключавшие трафик
-    sudo iptables -t nat -D OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -p tcp -d \$YOUR_SERVER_IP -j RETURN 2>/dev/null
-    sudo iptables -t nat -D OUTPUT -p tcp -d 127.0.0.0/8 -j RETURN 2>/dev/null
-
-    # Очистим и удалим цепочку REDSOCKS
     sudo iptables -t nat -F REDSOCKS 2>/dev/null
     sudo iptables -t nat -X REDSOCKS 2>/dev/null
 }
