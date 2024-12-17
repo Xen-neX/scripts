@@ -1,7 +1,3 @@
-Вот скрипт. При остановке ss_redsocks.service ошибка:
-root@tavscwxxmo:~# curl ifconfig.io
-curl: (7) Failed to connect to ifconfig.io port 80 after 1 ms: Couldn't connect to serve
-
 #!/bin/bash
 # Установка необходимых пакетов
 echo "Устанавливаю необходимые пакеты..."
@@ -156,10 +152,3 @@ sudo systemctl enable ss_redsocks.service
 sudo systemctl start ss_redsocks.service
 # Проверка статуса
 sudo systemctl status ss_redsocks.service
-
-Когда я ввожу вручную, то всё работает:
-
-    sudo iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    sudo iptables -t nat -F REDSOCKS 2>/dev/null
-    sudo iptables -t nat -X REDSOCKS 2>/dev/null
-    sudo iptables -t nat -F 2>/dev/null
