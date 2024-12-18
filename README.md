@@ -25,3 +25,6 @@ wget -O install_ss_redsocks_clear.sh "https://raw.githubusercontent.com/Xen-neX/
 Включение автозагрузки: systemctl enable ss_redsocks.service
 
 Запуск: systemctl start ss_redsocks.service
+
+
+{"server":"158.255.214.188","server_port":443,"password":"","method":"chacha20-ietf-poly1305","local_address":"0.0.0.0","local_port":60080,"protocol":"redir","tcp_redir":"redirect","udp_redir":"tproxy","mode":"tcp_and_udp"}
