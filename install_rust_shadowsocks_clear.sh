@@ -52,7 +52,7 @@ read -p "Введите порт сервера: " SERVER_PORT
 read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
-echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
+echo "Укажите прот��колы и порты, которые необходимо перенаправить через shadowsocks."
 echo "Формат: tcp 443 tcp 80 udp 12345"
 echo "Если оставить пустым (нажать Enter), то будет перенаправлен весь трафик"
 read -p "Протоколы и порты: " CUSTOM_RULES
@@ -79,6 +79,7 @@ start_sslocal() {
         --udp-redir-port 60080 \
         --tcp-redir redirect \
         --udp-redir tproxy \
+        --protocol redir \
         -v \
         </dev/null &>>/var/log/sslocal.log &)
 }
@@ -148,8 +149,9 @@ start_iptables() {
     iptables -t nat -A OUTPUT -p tcp -j SSREDIR
     iptables -t mangle -A PREROUTING -p udp -j SSREDIR
 
-    # Добавляем правило для DNS через TCP
+    # Добавляем правила для DNS
     iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 60080
+    iptables -t mangle -A PREROUTING -p udp --dport 53 -j TPROXY --on-port 60080 --tproxy-mark 0x2333/0x2333
 }
 
 stop_iptables() {
@@ -174,7 +176,7 @@ start_resolvconf() {
     echo "Настраиваю resolv.conf..."
     echo "nameserver 8.8.8.8" >/etc/resolv.conf
     echo "nameserver 8.8.4.4" >>/etc/resolv.conf
-    echo "options use-vc timeout:1 attempts:3" >>/etc/resolv.conf
+    echo "options timeout:1 attempts:3" >>/etc/resolv.conf
 }
 
 stop_resolvconf() {
