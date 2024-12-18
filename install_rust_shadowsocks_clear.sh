@@ -1,19 +1,50 @@
 #!/bin/bash
-
-echo "Версия 1.2.1 - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного DNS при stop и переустановке + --reuse-port --mptcp"
-
+echo "Версия 2.0.0 - Shadowsocks-rust edition - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного днс при stop и переустановке + --reuse-port"
 # Проверяем, запущена ли служба shadowsocks.service
 if systemctl is-active --quiet shadowsocks.service; then
     echo "shadowsocks.service активен. Останавливаю, чтобы восстановить системный DNS..."
     sudo systemctl stop shadowsocks.service
 fi
 
-# Сохраняем системный DNS
+# Теперь, когда служба остановлена (или не была запущена),
+# резольв должен быть системным. Сохраняем системный DNS.
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
-# Установка shadowsocks-rust
-wget "https://github.com/shadowsocks/shadowsocks-rust/releases/download/v1.21.2/shadowsocks-v1.21.2.x86_64-unknown-linux-gnu.tar.xz"
-tar xvJf shadowsocks-v1.21.2.x86_64-unknown-linux-gnu.tar.xz -C /usr/local/bin/
+echo "Устанавливаю shadowsocks-rust..."
+# Создаем временную директорию для загрузки
+TMP_DIR=$(mktemp -d)
+cd $TMP_DIR
+
+# Определяем архитектуру системы
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64)
+        ARCH_NAME="x86_64-unknown-linux-gnu"
+        ;;
+    aarch64)
+        ARCH_NAME="aarch64-unknown-linux-gnu"
+        ;;
+    *)
+        echo "Неподдерживаемая архитектура: $ARCH"
+        exit 1
+        ;;
+esac
+
+# Загружаем последнюю версию shadowsocks-rust
+LATEST_VERSION=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+wget "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${LATEST_VERSION}/shadowsocks-${LATEST_VERSION}.${ARCH_NAME}.tar.xz"
+tar -xf "shadowsocks-${LATEST_VERSION}.${ARCH_NAME}.tar.xz"
+
+# Устанавливаем бинарные файлы
+sudo mv ssserver /usr/local/bin/
+sudo mv sslocal /usr/local/bin/
+sudo mv ssurl /usr/local/bin/
+sudo mv ssmanager /usr/local/bin/
+sudo mv ssservice /usr/local/bin/
+
+# Очищаем временную директорию
+cd - > /dev/null
+rm -rf $TMP_DIR
 
 # Запрос параметров у пользователя
 read -p "Введите IP-адрес сервера: " SERVER_IP
@@ -27,6 +58,7 @@ echo "Если оставить пустым (нажать Enter), то буде
 read -p "Протоколы и порты: " CUSTOM_RULES
 
 # Создание скрипта shadowsocks.sh
+echo "Создаю скрипт shadowsocks.sh..."
 sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
@@ -34,16 +66,17 @@ SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 SERVER_PASSWORD="$SERVER_PASSWORD"
 CUSTOM_RULES="$CUSTOM_RULES"
-SYSTEM_DNS="$(printf %q "$SYSTEM_DNS")"
+SYSTEM_DNS=$(printf %q "$SYSTEM_DNS")
+SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_sslocal() {
     echo "Запускаю sslocal..."
-    (/usr/local/bin/sslocal -b "127.0.0.1:60080" --protocol redir -s "[\$SERVER_IP]:\$SERVER_PORT" -k "\$SERVER_PASSWORD" -m chacha20-ietf-poly1305 --tcp-redir redirect --udp-redir tproxy &>>/var/log/sslocal.log &)
+    (sslocal -s "\$SERVER_IP:\$SERVER_PORT" -m "chacha20-ietf-poly1305" -k "\$SERVER_PASSWORD" --tcp-redir "127.0.0.1:60080" --udp-redir "127.0.0.1:60080" -U --reuse-port </dev/null &>>/var/log/sslocal.log &)
 }
 
 stop_sslocal() {
     echo "Останавливаю sslocal..."
-    kill -9 $(pidof sslocal) &>/dev/null
+    kill -9 \$(pidof sslocal) &>/dev/null
 }
 
 start_iptables() {
@@ -125,6 +158,7 @@ start_resolvconf() {
 
 stop_resolvconf() {
     echo "Восстанавливаю resolv.conf..."
+    # Восстанавливаем исходное значение DNS
     echo "\$SYSTEM_DNS" > /etc/resolv.conf
 }
 
@@ -132,7 +166,6 @@ start() {
     echo "Запуск процесса..."
     start_sslocal
     start_iptables
-    iptables -t mangle -A OUTPUT -p udp --dport 53 -j MARK --set-mark 0x2333
     start_iproute2
     start_resolvconf
     echo "Процесс запущен."
@@ -179,9 +212,10 @@ EOF
 sudo chmod +x /usr/local/bin/shadowsocks.sh
 
 # Создание systemd-сервиса
+echo "Создаю systemd-сервис для shadowsocks.sh..."
 sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
 [Unit]
-Description=Shadowsocks-Rust Service
+Description=Shadowsocks Rust Custom Script
 After=network.target
 
 [Service]
@@ -194,10 +228,12 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-# Активируем службу
+# Активируем и запускаем сервис
+echo "Активирую и запускаю сервис shadowsocks.service..."
 sudo systemctl daemon-reload
 sudo systemctl enable shadowsocks.service
 sudo systemctl start shadowsocks.service
 
 # Проверка статуса
+echo "Сервис shadowsocks.service запущен. Проверяю статус..."
 sudo systemctl status shadowsocks.service
