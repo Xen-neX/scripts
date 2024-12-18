@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Установка Shadowsocks Rust Transparent Proxy - Обновленная версия с REDIRECT для TCP и TPROXY для UDP"
+echo "Установка Shadowsocks Rust Transparent Proxy - Обновленная версия с REDIRECT для TCP и TPROXY для UDP (только исходящий трафик)"
 
 # Проверяем, запущен ли уже shadowsocks.service и останавливаем его
 if systemctl is-active --quiet shadowsocks.service; then
@@ -56,7 +56,7 @@ read -p "Введите пароль для Shadowsocks: " SERVER_PASSWORD
 # Запрос пользовательских правил перенаправления
 echo "Укажите протоколы и порты для перенаправления через Shadowsocks."
 echo "Формат: tcp 443 tcp 80 udp 53"
-echo "Если оставить пустым (нажать Enter), будет перенаправлен весь TCP и UDP трафик."
+echo "Если оставить пустым (нажать Enter), будет перенаправлен весь исходящий TCP и UDP трафик."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
 # Создание скрипта управления Shadowsocks
@@ -146,6 +146,10 @@ start_iptables() {
     iptables -t mangle -A SSREDIR_TCP -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A SSREDIR_UDP -d 127.0.0.0/8 -j RETURN
 
+    # Исключаем трафик интерфейса SSH (порт 22)
+    iptables -t mangle -A SSREDIR_TCP -p tcp --dport 22 -j RETURN
+    iptables -t mangle -A SSREDIR_UDP -p udp --dport 22 -j RETURN
+
     if [ -n "\$CUSTOM_RULES" ]; then
         # Пользовательские правила
         PROTO_PORTS=(\$CUSTOM_RULES)
@@ -163,7 +167,7 @@ start_iptables() {
             fi
         done
     else
-        # Перенаправляем весь TCP и UDP трафик
+        # Перенаправляем весь исходящий TCP и UDP трафик
         iptables -t mangle -A SSREDIR_TCP -p tcp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
         iptables -t mangle -A SSREDIR_UDP -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     fi
@@ -172,9 +176,7 @@ start_iptables() {
     iptables -t mangle -A SSREDIR_TCP -j CONNMARK --save-mark
     iptables -t mangle -A SSREDIR_UDP -j CONNMARK --save-mark
 
-    # Применяем цепочки SSREDIR_TCP и SSREDIR_UDP к PREROUTING и OUTPUT
-    iptables -t mangle -A PREROUTING -p tcp -j SSREDIR_TCP
-    iptables -t mangle -A PREROUTING -p udp -j SSREDIR_UDP
+    # Применяем цепочки SSREDIR_TCP и SSREDIR_UDP только к OUTPUT цепочке (исходящему трафику)
     iptables -t mangle -A OUTPUT -p tcp -j SSREDIR_TCP
     iptables -t mangle -A OUTPUT -p udp -j SSREDIR_UDP
 
@@ -189,14 +191,14 @@ stop_iptables() {
     echo "Очищаю iptables..."
 
     # Удаление правил REDIRECT для TCP
+    iptables -t mangle -D OUTPUT -p tcp -j SSREDIR_TCP 2>/dev/null
     iptables -t mangle -D SSREDIR_TCP -p tcp -m mark --mark 0x2333 -j REDIRECT --to-ports 60080 2>/dev/null
 
     # Удаление правил TPROXY для UDP
+    iptables -t mangle -D OUTPUT -p udp -j SSREDIR_UDP 2>/dev/null
     iptables -t mangle -D SSREDIR_UDP -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333/0x2333 2>/dev/null
 
-    # Удаление цепочек SSREDIR_TCP и SSREDIR_UDP из PREROUTING и OUTPUT
-    iptables -t mangle -D PREROUTING -p tcp -j SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -D PREROUTING -p udp -j SSREDIR_UDP 2>/dev/null
+    # Удаление цепочек SSREDIR_TCP и SSREDIR_UDP из OUTPUT
     iptables -t mangle -D OUTPUT -p tcp -j SSREDIR_TCP 2>/dev/null
     iptables -t mangle -D OUTPUT -p udp -j SSREDIR_UDP 2>/dev/null
 
