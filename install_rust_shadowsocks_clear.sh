@@ -2,20 +2,20 @@
 
 echo "Версия 2.0 - Полное прозрачное проксирование трафика с использованием shadowsocks-rust"
 
-# Проверка, запущен ли скрипт уже
+# Проверяем, запущен ли уже shadowsocks.service и останавливаем его для чистой установки
 if systemctl is-active --quiet shadowsocks.service; then
     echo "Обнаружен запущенный сервис shadowsocks.service. Останавливаю его..."
     sudo systemctl stop shadowsocks.service
 fi
 
-# Сохранение текущего DNS
+# Сохраняем текущий DNS
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
 echo "Устанавливаю необходимые пакеты..."
 sudo apt-get update
 sudo apt-get install -y iptables iproute2 wget tar
 
-# Скачивание и установка shadowsocks-rust
+# Скачиваем и устанавливаем shadowsocks-rust
 VERSION="v1.21.2"
 DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${VERSION}/shadowsocks-${VERSION}.x86_64-unknown-linux-gnu.tar.xz"
 
@@ -40,7 +40,7 @@ read -p "Введите пароль для Shadowsocks: " SERVER_PASSWORD
 # Запрос пользовательских правил перенаправления
 echo "Укажите протоколы и порты для перенаправления через Shadowsocks."
 echo "Формат: tcp 443 tcp 80 udp 53"
-echo "Если оставить пустым (нажать Enter), будет перенаправлен весь TCP-трафик и только UDP/53 для DNS."
+echo "Если оставить пустым (нажать Enter), будет перенаправлен весь TCP и UDP трафик."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
 # Создание скрипта управления shadowsocks.sh
@@ -61,22 +61,22 @@ SSLOCAL_LOG="/var/log/sslocal.log"
 
 start_sslocal() {
     echo "Запускаю sslocal..."
-    
+
     # Останавливаем любые существующие процессы sslocal
-    pkill -x sslocal
+    sudo pkill -x sslocal
 
     # Запуск sslocal в режиме redir для прозрачного проксирования
-    sslocal -b "127.0.0.1:60080" \
-            --protocol redir \
-            -s "\$SERVER_IP:\$SERVER_PORT" \
-            -k "\$SERVER_PASSWORD" \
-            -m "chacha20-ietf-poly1305" \
-            --tcp-redir "redirect" \
-            --udp-redir "tproxy" \
-            --reuse-port \
-            --mptcp \
-            &> "\$SSLOCAL_LOG" &
-    
+    sudo /usr/local/bin/sslocal -b "127.0.0.1:60080" \\
+        --protocol redir \\
+        -s "\$SERVER_IP:\$SERVER_PORT" \\
+        -k "\$SERVER_PASSWORD" \\
+        -m "chacha20-ietf-poly1305" \\
+        --tcp-redir "redirect" \\
+        --udp-redir "tproxy" \\
+        --reuse-port \\
+        --mptcp \\
+        &> "\$SSLOCAL_LOG" &
+
     SSLOCAL_PID=\$!
     sleep 2
 
@@ -90,7 +90,7 @@ start_sslocal() {
 
 stop_sslocal() {
     echo "Останавливаю sslocal..."
-    pkill -x sslocal
+    sudo pkill -x sslocal
     sleep 1
     if pgrep -x sslocal > /dev/null; then
         echo "Не удалось остановить sslocal."
@@ -101,16 +101,12 @@ stop_sslocal() {
 
 start_iproute2() {
     echo "Настраиваю iproute2..."
-    
-    # Добавление правил маршрутизации
     sudo ip rule add fwmark 0x2333 table 100 2>/dev/null
     sudo ip route add local default dev lo table 100 2>/dev/null
 }
 
 stop_iproute2() {
     echo "Очищаю iproute2..."
-    
-    # Удаление правил маршрутизации
     sudo ip rule del fwmark 0x2333 table 100 2>/dev/null
     sudo ip route del local default dev lo table 100 2>/dev/null
 }
@@ -149,9 +145,9 @@ start_iptables() {
             fi
         done
     else
-        # Перенаправляем весь TCP-трафик и только UDP/53 для DNS
+        # Перенаправляем весь TCP и UDP трафик
         sudo iptables -t mangle -A SSREDIR -p tcp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-        sudo iptables -t mangle -A SSREDIR -p udp --dport 53 -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
+        sudo iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     fi
 
     # Сохраняем метки соединений
@@ -218,6 +214,8 @@ start() {
     start_iptables
     start_resolvconf
     echo "Процесс запущен."
+    # Чтобы скрипт не завершался, ожидаем завершения sslocal
+    wait
 }
 
 stop() {
@@ -237,6 +235,7 @@ restart() {
 }
 
 main() {
+    echo "Переданы аргументы: \$@"
     if [ \$# -eq 0 ]; then
         echo "Использование: \$0 {start|stop|restart}"
         exit 1
@@ -276,7 +275,7 @@ After=network.target
 ExecStart=/usr/local/bin/shadowsocks.sh start
 ExecStop=/usr/local/bin/shadowsocks.sh stop
 Restart=on-failure
-RemainAfterExit=yes
+Type=simple
 
 [Install]
 WantedBy=multi-user.target
