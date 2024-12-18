@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Установка Shadowsocks Rust Transparent Proxy - Обновленная версия с REDIRECT для TCP и TPROXY для UDP (только исходящий трафик)"
+echo "Установка Shadowsocks Rust Transparent Proxy - Обновленная версия с конфигурационным файлом"
 
 # Проверяем, запущен ли уже shadowsocks.service и останавливаем его
 if systemctl is-active --quiet shadowsocks.service; then
@@ -59,36 +59,50 @@ echo "Формат: tcp 443 tcp 80 udp 53"
 echo "Если оставить пустым (нажать Enter), будет перенаправлен весь исходящий TCP и UDP трафик."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
+# Создание конфигурационного файла для sslocal
+echo "Создаю конфигурационный файл /etc/shadowsocks.json..."
+tee /etc/shadowsocks.json > /dev/null <<EOF
+{
+    "server": "$SERVER_IP",
+    "server_port": $SERVER_PORT,
+    "password": "$SERVER_PASSWORD",
+    "method": "chacha20-ietf-poly1305",
+    "mode": "redir",
+    "local_address": "127.0.0.1",
+    "local_port": 60080,
+    "dns": "1.1.1.1"
+}
+EOF
+
 # Создание скрипта управления Shadowsocks
 echo "Создаю скрипт управления Shadowsocks..."
 tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
 # Параметры сервера
-SERVER_IP="$SERVER_IP"
-SERVER_PORT="$SERVER_PORT"
-SERVER_PASSWORD="$SERVER_PASSWORD"
-CUSTOM_RULES="$CUSTOM_RULES"
+CONFIG_FILE="/etc/shadowsocks.json"
 SYSTEM_DNS="\$SYSTEM_DNS"
 
 # Лог файл sslocal
 SSLOCAL_LOG="/var/log/sslocal.log"
 
+start_resolvconf() {
+    echo "Настраиваю resolv.conf на локальный DNS (127.0.0.1)..."
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+}
+
+stop_resolvconf() {
+    echo "Восстанавливаю исходный resolv.conf..."
+    echo "\$SYSTEM_DNS" > /etc/resolv.conf
+}
+
 start_sslocal() {
     echo "Запускаю sslocal..."
-
     # Останавливаем любые существующие процессы sslocal
     pkill -x sslocal
 
-    # Запуск sslocal в режиме redir для прозрачного проксирования
-    /usr/local/bin/sslocal -b "127.0.0.1:60080" \\
-        --protocol redir \\
-        -s "\$SERVER_IP:\$SERVER_PORT" \\
-        -k "\$SERVER_PASSWORD" \\
-        -m "chacha20-ietf-poly1305" \\
-        --tcp-redir "redirect" \\
-        --udp-redir "tproxy" \\
-        &> "\$SSLOCAL_LOG" &
+    # Запуск sslocal с использованием конфигурационного файла
+    /usr/local/bin/sslocal -c "\$CONFIG_FILE" &> "\$SSLOCAL_LOG" &
 
     SSLOCAL_PID=\$!
     sleep 2
@@ -146,7 +160,7 @@ start_iptables() {
     iptables -t mangle -A SSREDIR_TCP -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A SSREDIR_UDP -d 127.0.0.0/8 -j RETURN
 
-    # Исключаем трафик интерфейса SSH (порт 22)
+    # Исключаем трафик SSH (порт 22)
     iptables -t mangle -A SSREDIR_TCP -p tcp --dport 22 -j RETURN
     iptables -t mangle -A SSREDIR_UDP -p udp --dport 22 -j RETURN
 
@@ -212,16 +226,6 @@ stop_iptables() {
     iptables -t mangle -F 2>/dev/null
 }
 
-start_resolvconf() {
-    echo "Настраиваю resolv.conf на публичный DNS (1.1.1.1)..."
-    echo "nameserver 1.1.1.1" > /etc/resolv.conf
-}
-
-stop_resolvconf() {
-    echo "Восстанавливаю исходный resolv.conf..."
-    echo "\$SYSTEM_DNS" > /etc/resolv.conf
-}
-
 start_iproute2() {
     echo "Настраиваю iproute2..."
     ip rule add fwmark 0x2333 lookup 100 2>/dev/null
@@ -236,10 +240,10 @@ stop_iproute2() {
 
 start() {
     echo "Запуск процесса..."
+    start_resolvconf
     start_sslocal
     start_iproute2
     start_iptables
-    start_resolvconf
     echo "Процесс запущен."
     # Чтобы скрипт не завершался, ожидаем завершения sslocal
     wait
@@ -247,10 +251,10 @@ start() {
 
 stop() {
     echo "Остановка процесса..."
-    stop_resolvconf
     stop_iptables
     stop_iproute2
     stop_sslocal
+    stop_resolvconf
     echo "Процесс остановлен."
 }
 
