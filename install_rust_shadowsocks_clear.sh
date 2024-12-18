@@ -52,7 +52,7 @@ read -p "Введите порт сервера: " SERVER_PORT
 read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
-echo "Укажите прот��колы и порты, которые необходимо перенаправить через shadowsocks."
+echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
 echo "Формат: tcp 443 tcp 80 udp 12345"
 echo "Если оставить пустым (нажать Enter), то будет перенаправлен весь трафик"
 read -p "Протоколы и порты: " CUSTOM_RULES
@@ -72,14 +72,12 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 start_sslocal() {
     echo "Запускаю sslocal..."
     (sslocal \
-        -s "$SERVER_IP:$SERVER_PORT" \
-        -m "chacha20-ietf-poly1305" \
-        -k "$SERVER_PASSWORD" \
-        --tcp-redir-port 60080 \
-        --udp-redir-port 60080 \
+        --server-addr "$SERVER_IP:$SERVER_PORT" \
+        --encrypt-method "chacha20-ietf-poly1305" \
+        --password "$SERVER_PASSWORD" \
         --tcp-redir redirect \
         --udp-redir tproxy \
-        --protocol redir \
+        --local-addr "127.0.0.1:60080" \
         -v \
         </dev/null &>>/var/log/sslocal.log &)
 }
