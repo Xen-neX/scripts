@@ -52,7 +52,7 @@ read -p "Введите порт сервера: " SERVER_PORT
 read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
-echo "Укажите прот��колы и порты, которые необходимо перенаправить через shadowsocks."
+echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
 echo "Формат: tcp 443 tcp 80 udp 12345"
 echo "Если оставить пустым (нажать Enter), то будет перенаправлен весь трафик"
 read -p "Протоколы и порты: " CUSTOM_RULES
@@ -75,7 +75,8 @@ start_sslocal() {
         -s "$SERVER_IP:$SERVER_PORT" \
         -m "chacha20-ietf-poly1305" \
         -k "$SERVER_PASSWORD" \
-        -b "0.0.0.0:60080" \
+        --tcp-redir-port 60080 \
+        --udp-redir-port 60080 \
         --tcp-redir redirect \
         --udp-redir tproxy \
         -v \
@@ -110,6 +111,17 @@ start_iptables() {
     iptables -t nat -A SSREDIR -d 224.0.0.0/4 -j RETURN
     iptables -t nat -A SSREDIR -d 240.0.0.0/4 -j RETURN
 
+    # Копируем правила исключений для UDP
+    iptables -t mangle -A SSREDIR -d $SERVER_IP -j RETURN
+    iptables -t mangle -A SSREDIR -d 0.0.0.0/8 -j RETURN
+    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
+    iptables -t mangle -A SSREDIR -d 10.0.0.0/8 -j RETURN
+    iptables -t mangle -A SSREDIR -d 169.254.0.0/16 -j RETURN
+    iptables -t mangle -A SSREDIR -d 172.16.0.0/12 -j RETURN
+    iptables -t mangle -A SSREDIR -d 192.168.0.0/16 -j RETURN
+    iptables -t mangle -A SSREDIR -d 224.0.0.0/4 -j RETURN
+    iptables -t mangle -A SSREDIR -d 240.0.0.0/4 -j RETURN
+
     if [ -n "$CUSTOM_RULES" ]; then
         PROTO_PORTS=($CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
@@ -122,19 +134,22 @@ start_iptables() {
             if [ "$PROTO" = "tcp" ]; then
                 iptables -t nat -A SSREDIR -p tcp --dport $PORT -j REDIRECT --to-ports 60080
             elif [ "$PROTO" = "udp" ]; then
-                iptables -t mangle -A SSREDIR -p udp --dport $PORT -j TPROXY --on-port 60080 --on-ip 127.0.0.1
+                iptables -t mangle -A SSREDIR -p udp --dport $PORT -j TPROXY --on-port 60080 --tproxy-mark 0x2333/0x2333
             fi
         done
     else
         # Перенаправляем весь TCP трафик
         iptables -t nat -A SSREDIR -p tcp -j REDIRECT --to-ports 60080
         # Перенаправляем весь UDP трафик
-        iptables -t mangle -A SSREDIR -p udp -j TPROXY --on-port 60080 --on-ip 127.0.0.1
+        iptables -t mangle -A SSREDIR -p udp -j TPROXY --on-port 60080 --tproxy-mark 0x2333/0x2333
     fi
 
     # Подключаем цепочки к OUTPUT и PREROUTING
     iptables -t nat -A OUTPUT -p tcp -j SSREDIR
     iptables -t mangle -A PREROUTING -p udp -j SSREDIR
+
+    # Добавляем правило для DNS через TCP
+    iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 60080
 }
 
 stop_iptables() {
@@ -158,7 +173,8 @@ stop_iproute2() {
 start_resolvconf() {
     echo "Настраиваю resolv.conf..."
     echo "nameserver 8.8.8.8" >/etc/resolv.conf
-    echo "options use-vc" >>/etc/resolv.conf  # Принудительно использовать TCP для DNS
+    echo "nameserver 8.8.4.4" >>/etc/resolv.conf
+    echo "options use-vc timeout:1 attempts:3" >>/etc/resolv.conf
 }
 
 stop_resolvconf() {
