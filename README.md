@@ -1,8 +1,8 @@
 # scripts
 
-curl -o install_shadowsocks.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/test/install_shadowsocks_clear.sh" && chmod +x install_shadowsocks.sh && sudo ./install_shadowsocks.sh
+curl -o install_shadowsocks.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/main/install_shadowsocks_clear.sh" && chmod +x install_shadowsocks.sh && sudo ./install_shadowsocks.sh
 
-wget -O install_shadowsocks.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/test/install_shadowsocks_clear.sh" && chmod +x install_shadowsocks.sh && sudo ./install_shadowsocks.sh
+wget -O install_shadowsocks.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/main/install_shadowsocks_clear.sh" && chmod +x install_shadowsocks.sh && sudo ./install_shadowsocks.sh
 
 Откат: systemctl stop shadowsocks.service
 
@@ -14,9 +14,9 @@ wget -O install_shadowsocks.sh "https://raw.githubusercontent.com/Xen-neX/script
 
 АЛЬТЕРНАТИВНЫЙ ВАРИАНТ, ТОЛЬКО 443 и 80 ПО УМОЛЧАНИЮ
 
-curl -o install_ss_redsocks_clear.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/test/install_ss_redsocks_clear.sh" && chmod +x install_ss_redsocks_clear.sh && sudo ./install_ss_redsocks_clear.sh
+curl -o install_ss_redsocks_clear.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/main/install_ss_redsocks_clear.sh" && chmod +x install_ss_redsocks_clear.sh && sudo ./install_ss_redsocks_clear.sh
 
-wget -O install_ss_redsocks_clear.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/test/install_ss_redsocks_clear.sh" && chmod +x install_ss_redsocks_clear.sh && sudo ./install_ss_redsocks_clear.sh
+wget -O install_ss_redsocks_clear.sh "https://raw.githubusercontent.com/Xen-neX/scripts/refs/heads/main/install_ss_redsocks_clear.sh" && chmod +x install_ss_redsocks_clear.sh && sudo ./install_ss_redsocks_clear.sh
 
 Откат: systemctl stop ss_redsocks.service
 
