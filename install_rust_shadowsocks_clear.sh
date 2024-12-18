@@ -1,49 +1,51 @@
 #!/bin/bash
 
-echo "Версия 2.0 - Полное прозрачное проксирование трафика с использованием shadowsocks-rust"
+echo "Установка Shadowsocks Rust Transparent Proxy - Полная версия"
 
-# Проверяем, запущен ли уже shadowsocks.service и останавливаем его для чистой установки
+# Проверяем, запущена ли уже shadowsocks.service и останавливаем её
 if systemctl is-active --quiet shadowsocks.service; then
-    echo "Обнаружен запущенный сервис shadowsocks.service. Останавливаю его..."
+    echo "shadowsocks.service уже запущен. Останавливаю его..."
     systemctl stop shadowsocks.service
 fi
 
-# Сохраняем текущий DNS
+# Сохраняем текущие настройки DNS
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
 echo "Устанавливаю необходимые пакеты..."
 apt-get update
 apt-get install -y iptables iproute2 wget tar
 
-# Скачиваем и устанавливаем shadowsocks-rust
+# Скачиваем shadowsocks-rust
 VERSION="v1.21.2"
 DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${VERSION}/shadowsocks-${VERSION}.x86_64-unknown-linux-gnu.tar.xz"
 
-echo "Скачиваю shadowsocks-rust версии ${VERSION}..."
+echo "Скачиваю Shadowsocks-rust версии ${VERSION}..."
 wget "${DOWNLOAD_URL}" -O /tmp/shadowsocks.tar.xz
 
 echo "Распаковываю архив..."
 tar -xvf /tmp/shadowsocks.tar.xz -C /tmp/
 
-# Проверка наличия sslocal
+# Проверяем, существует ли sslocal в /tmp/
 SSLOCAL_SRC="/tmp/sslocal"
 if [ ! -f "$SSLOCAL_SRC" ]; then
-    echo "Ошибка: sslocal не найден в /tmp/. Проверьте содержимое архива."
-    echo "Содержимое /tmp после распаковки:"
+    echo "Ошибка: sslocal не найден в /tmp/ после распаковки архива."
+    echo "Содержимое /tmp/ после распаковки:"
     ls -l /tmp | grep sslocal
     exit 1
 fi
 
-echo "Перемещаю бинарный файл sslocal в /usr/local/bin/..."
+echo "Перемещаю sslocal в /usr/local/bin/..."
 mv "$SSLOCAL_SRC" /usr/local/bin/
+chown root:root /usr/local/bin/sslocal
 chmod +x /usr/local/bin/sslocal
 
 # Очистка временных файлов
 rm -rf /tmp/shadowsocks.tar.xz /tmp/shadowsocks-*
 
-# Создание директории для логов, если она не существует
+# Создание директории для логов, если не существует
 mkdir -p /var/log
 touch /var/log/sslocal.log
+chown root:root /var/log/sslocal.log
 chmod 644 /var/log/sslocal.log
 
 # Запрос параметров у пользователя
@@ -57,8 +59,8 @@ echo "Формат: tcp 443 tcp 80 udp 53"
 echo "Если оставить пустым (нажать Enter), будет перенаправлен весь TCP и UDP трафик."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
-# Создание скрипта управления shadowsocks.sh
-echo "Создаю скрипт /usr/local/bin/shadowsocks.sh..."
+# Создание скрипта управления Shadowsocks
+echo "Создаю скрипт управления Shadowsocks..."
 tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
@@ -67,7 +69,6 @@ SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
 SERVER_PASSWORD="$SERVER_PASSWORD"
 CUSTOM_RULES="$CUSTOM_RULES"
-SYSTEM_DNS=\$(printf '%q' "\$SYSTEM_DNS")
 SYSTEM_DNS="\$SYSTEM_DNS"
 
 # Лог файл sslocal
@@ -87,6 +88,7 @@ start_sslocal() {
         -m "chacha20-ietf-poly1305" \\
         --tcp-redir "redirect" \\
         --udp-redir "tproxy" \\
+        --reuse-port \\
         --mptcp \\
         &> "\$SSLOCAL_LOG" &
 
