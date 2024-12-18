@@ -186,18 +186,24 @@ restart() {
 }
 
 main() {
-    if [ \$# -eq 0 ]; then
-        echo "Использование: \$0 {start|stop|restart}"
+    if [ $# -eq 0 ]; then
+        echo "Использование: $0 {start|stop|restart}"
         exit 1
     fi
 
-    case "\$1" in
-        start|stop|restart)
-            "$1"
+    case "$1" in # Кавычки важны!
+        start)
+            start
             ;;
-        *)
-            echo "Неизвестная команда: \$1"
-            echo "Использование: \$0 {start|stop|restart}"
+        stop)
+            stop
+            ;;
+        restart)
+            restart
+            ;;
+        *) # Обработка всех остальных случаев
+            echo "Неизвестная команда: $1"
+            echo "Использование: $0 {start|stop|restart}"
             exit 1
             ;;
     esac
