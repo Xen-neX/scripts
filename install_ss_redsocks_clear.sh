@@ -4,14 +4,16 @@ echo "Устанавливаю необходимые пакеты..."
 sudo apt-get update
 sudo apt-get install -y shadowsocks-libev redsocks
 
-# Запрос параметров для Shadowsocks
+# Запрос параметров от пользователя
 read -p "Введите IP-адрес Shadowsocks-сервера: " SERVER_IP
 read -p "Введите порт Shadowsocks-сервера: " SERVER_PORT
 read -p "Введите пароль Shadowsocks: " SERVER_PASSWORD
 
-# Запрос правил перенаправления
+# Запрос пользовательских правил перенаправления (по аналогии с TPROXY скриптом)
+# Формат: tcp 443 tcp 80 udp 12345
+# Пустой ввод = использовать порты 80 и 443 по умолчанию
 echo "Укажите протоколы и порты для перенаправления (например: tcp 443 tcp 80 udp 12345)."
-echo "Если оставить пустым, будет перенаправляться весь TCP-трафик и только UDP/53 для DNS."
+echo "Если оставить пустым, будут использованы порты 80 и 443 (TCP)."
 read -p "Протоколы и порты: " CUSTOM_RULES
 
 # Сохраняем текущий DNS
@@ -56,7 +58,7 @@ redudp {
     local_port = 10053;
     ip = 127.0.0.1;
     port = 1080;
-    dest_ip = 1.1.1.1;
+    dest_ip = 192.0.2.2;
     dest_port = 53;
     udp_timeout = 30;
     udp_timeout_stream = 180;
@@ -68,7 +70,7 @@ dnstc {
 }
 EOF
 
-echo "Создаю скрипт запуска/остановки /usr/local/bin/ss_redsocks.sh..."
+echo "Создаю скрипт для запуска Shadowsocks и Redsocks..."
 sudo tee /usr/local/bin/ss_redsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
@@ -80,7 +82,7 @@ SYSTEM_DNS="\$SYSTEM_DNS"
 
 start_shadowsocks() {
     echo "Запускаю Shadowsocks..."
-    (nohup ss-local -u -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
+    (nohup ss-local -c /etc/shadowsocks-libev/config.json &>/var/log/shadowsocks.log &)
 }
 
 stop_shadowsocks() {
@@ -99,7 +101,7 @@ stop_redsocks() {
 }
 
 start_resolvconf() {
-    echo "Настраиваю DNS на публичный (1.1.1.1)..."
+    echo "Настраиваю resolv.conf на публичный DNS..."
     echo "nameserver 1.1.1.1" > /etc/resolv.conf
 }
 
@@ -121,7 +123,7 @@ configure_iptables() {
     /usr/sbin/iptables -t nat -A OUTPUT -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
 
     if [ -n "\$CUSTOM_RULES" ]; then
-        # Пользователь указал протоколы и порты
+        # Пользовательские правила
         PROTO_PORTS=(\$CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
         i=0
@@ -130,38 +132,28 @@ configure_iptables() {
             PORT=\${PROTO_PORTS[\$((i+1))]}
             i=\$((i+2))
 
+            # Для tcp
             if [ "\$PROTO" = "tcp" ]; then
                 /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport \$PORT -j REDIRECT --to-ports 12345
             elif [ "\$PROTO" = "udp" ]; then
-                /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport \$PORT -j REDIRECT --to-ports 10053
+                # Для udp redsocks обычно не перехватывает все порты, но мы можем для примера сделать то же самое:
+                # Однако TPROXY обычно использовался для udp. Redsocks для udp ограниченно работает, но оставим как есть.
+                /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport \$PORT -j REDIRECT --to-ports 12345
             fi
         done
-
-        # Применяем правила для TCP
-        /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-        # Применяем правила для UDP (только заданные порты)
-        /usr/sbin/iptables -t nat -A OUTPUT -p udp -j REDSOCKS
     else
-        # Нет пользовательских правил:
-        # Перенаправляем весь TCP-трафик
-        /usr/sbin/iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
-        /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-
-        # Перенаправляем только UDP/53 для DNS
-        /usr/sbin/iptables -t nat -A REDSOCKS -p udp --dport 53 -j REDIRECT --to-ports 10053
-        /usr/sbin/iptables -t nat -A OUTPUT -p udp --dport 53 -j REDSOCKS
-        # Остальной UDP не перенаправляется, поэтому ничего не делаем для всего остального UDP.
+        # Старое поведение, если пользователь не ввел ничего
+        /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 80 -j REDIRECT --to-ports 12345
+        /usr/sbin/iptables -t nat -A REDSOCKS -p tcp --dport 443 -j REDIRECT --to-ports 12345
     fi
+
+    # Перенаправляем остальной TCP трафик через REDSOCKS
+    /usr/sbin/iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 }
 
 clear_iptables() {
     echo "Очищаю iptables..."
-    # Удаляем правила для TCP
     /usr/sbin/iptables -t nat -D OUTPUT -p tcp -j REDSOCKS 2>/dev/null
-    # Пытаемся удалить правило для UDP
-    /usr/sbin/iptables -t nat -D OUTPUT -p udp --dport 53 -j REDSOCKS 2>/dev/null
-    /usr/sbin/iptables -t nat -D OUTPUT -p udp -j REDSOCKS 2>/dev/null
-
     /usr/sbin/iptables -t nat -F REDSOCKS 2>/dev/null
     /usr/sbin/iptables -t nat -X REDSOCKS 2>/dev/null
     /usr/sbin/iptables -t nat -F 2>/dev/null
@@ -176,10 +168,16 @@ start() {
 }
 
 stop() {
+    # СНАЧАЛА очищаем правила iptables
     clear_iptables
+
+    # ПОТОМ восстанавливаем DNS
     stop_resolvconf
+
+    # ПОТОМ останавливаем сервисы
     stop_shadowsocks
     stop_redsocks
+
     echo "Все сервисы остановлены и iptables восстановлен."
 }
 
@@ -212,7 +210,7 @@ EOF
 
 sudo chmod +x /usr/local/bin/ss_redsocks.sh
 
-echo "Создаю systemd-сервис ss_redsocks.service..."
+echo "Создаю systemd-сервис..."
 sudo tee /etc/systemd/system/ss_redsocks.service > /dev/null <<EOF
 [Unit]
 Description=Shadowsocks + Redsocks Service
@@ -233,5 +231,5 @@ sudo systemctl daemon-reload
 sudo systemctl enable ss_redsocks.service
 sudo systemctl start ss_redsocks.service
 
-echo "Проверка статуса..."
+echo "Проверка статуса:"
 sudo systemctl status ss_redsocks.service
