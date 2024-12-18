@@ -1,171 +1,72 @@
 #!/bin/bash
 
-echo "Установка Shadowsocks Rust Transparent Proxy - Обновленная версия с конфигурационным файлом"
+echo "Версия 1.2.1 - полное прозрачное проксирование всего трафика или выбор портов + восстановление системного DNS при stop и переустановке + --reuse-port --mptcp"
 
-# Проверяем, запущен ли уже shadowsocks.service и останавливаем его
+# Проверяем, запущена ли служба shadowsocks.service
 if systemctl is-active --quiet shadowsocks.service; then
-    echo "shadowsocks.service уже запущен. Останавливаю его..."
-    systemctl stop shadowsocks.service
+    echo "shadowsocks.service активен. Останавливаю, чтобы восстановить системный DNS..."
+    sudo systemctl stop shadowsocks.service
 fi
 
-# Сохраняем текущие настройки DNS
+# Сохраняем системный DNS
 SYSTEM_DNS="$(cat /etc/resolv.conf)"
 
-echo "Устанавливаю необходимые пакеты..."
-apt-get update
-apt-get install -y iptables iproute2 wget tar net-tools
-
-# Скачиваем shadowsocks-rust
-VERSION="v1.21.2"
-DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${VERSION}/shadowsocks-${VERSION}.x86_64-unknown-linux-gnu.tar.xz"
-
-echo "Скачиваю Shadowsocks-rust версии ${VERSION}..."
-wget "${DOWNLOAD_URL}" -O /tmp/shadowsocks.tar.xz
-
-echo "Распаковываю архив..."
-tar -xvf /tmp/shadowsocks.tar.xz -C /tmp/
-
-# Проверяем, существует ли sslocal в /tmp/
-SSLOCAL_SRC="/tmp/sslocal"
-if [ ! -f "$SSLOCAL_SRC" ]; then
-    echo "Ошибка: sslocal не найден в /tmp/ после распаковки архива."
-    echo "Содержимое /tmp/ после распаковки:"
-    ls -l /tmp | grep sslocal
-    exit 1
-fi
-
-echo "Перемещаю sslocal в /usr/local/bin/..."
-mv "$SSLOCAL_SRC" /usr/local/bin/
-chown root:root /usr/local/bin/sslocal
-chmod +x /usr/local/bin/sslocal
-
-# Очистка временных файлов
-rm -rf /tmp/shadowsocks.tar.xz /tmp/shadowsocks-*
-
-# Создание директории для логов, если не существует
-mkdir -p /var/log
-touch /var/log/sslocal.log
-chown root:root /var/log/sslocal.log
-chmod 644 /var/log/sslocal.log
+# Установка shadowsocks-rust
+wget "https://github.com/shadowsocks/shadowsocks-rust/releases/download/v1.21.2/shadowsocks-v1.21.2.x86_64-unknown-linux-gnu.tar.xz"
+tar xvJf shadowsocks-v1.21.2.x86_64-unknown-linux-gnu.tar.xz -C /usr/local/bin/
 
 # Запрос параметров у пользователя
-read -p "Введите IP-адрес сервера Shadowsocks: " SERVER_IP
-read -p "Введите порт сервера Shadowsocks: " SERVER_PORT
-read -p "Введите пароль для Shadowsocks: " SERVER_PASSWORD
+read -p "Введите IP-адрес сервера: " SERVER_IP
+read -p "Введите порт сервера: " SERVER_PORT
+read -p "Введите пароль: " SERVER_PASSWORD
 
 # Запрос пользовательских правил перенаправления
-echo "Укажите протоколы и порты для перенаправления через Shadowsocks."
-echo "Формат: tcp 443 tcp 80 udp 53"
-echo "Если оставить пустым (нажать Enter), будет перенаправлен весь исходящий TCP и UDP трафик."
+echo "Укажите протоколы и порты, которые необходимо перенаправить через shadowsocks."
+echo "Формат: tcp 443 tcp 80 udp 12345"
+echo "Если оставить пустым (нажать Enter), то будет перенаправлен весь трафик"
 read -p "Протоколы и порты: " CUSTOM_RULES
 
-# Создание конфигурационного файла для sslocal
-echo "Создаю конфигурационный файл /etc/shadowsocks.json..."
-tee /etc/shadowsocks.json > /dev/null <<EOF
-{
-    "server": "$SERVER_IP",
-    "server_port": $SERVER_PORT,
-    "password": "$SERVER_PASSWORD",
-    "method": "chacha20-ietf-poly1305",
-    "mode": "redir",
-    "local_address": "127.0.0.1",
-    "local_port": 60080,
-    "dns": "1.1.1.1"
-}
-EOF
-
-# Создание скрипта управления Shadowsocks
-echo "Создаю скрипт управления Shadowsocks..."
-tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
+# Создание скрипта shadowsocks.sh
+sudo tee /usr/local/bin/shadowsocks.sh > /dev/null <<EOF
 #!/bin/bash
 
-# Параметры сервера
-CONFIG_FILE="/etc/shadowsocks.json"
-SYSTEM_DNS="\$SYSTEM_DNS"
-
-# Лог файл sslocal
-SSLOCAL_LOG="/var/log/sslocal.log"
-
-start_resolvconf() {
-    echo "Настраиваю resolv.conf на локальный DNS (127.0.0.1)..."
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf
-}
-
-stop_resolvconf() {
-    echo "Восстанавливаю исходный resolv.conf..."
-    echo "\$SYSTEM_DNS" > /etc/resolv.conf
-}
+SERVER_IP="$SERVER_IP"
+SERVER_PORT="$SERVER_PORT"
+SERVER_PASSWORD="$SERVER_PASSWORD"
+CUSTOM_RULES="$CUSTOM_RULES"
+SYSTEM_DNS="$(printf %q "$SYSTEM_DNS")"
 
 start_sslocal() {
     echo "Запускаю sslocal..."
-    # Останавливаем любые существующие процессы sslocal
-    pkill -x sslocal
-
-    # Запуск sslocal с использованием конфигурационного файла
-    /usr/local/bin/sslocal -c "\$CONFIG_FILE" &> "\$SSLOCAL_LOG" &
-
-    SSLOCAL_PID=\$!
-    sleep 2
-
-    if ps -p \$SSLOCAL_PID > /dev/null; then
-        echo "sslocal запущен с PID \$SSLOCAL_PID"
-    else
-        echo "Не удалось запустить sslocal. Проверьте \$SSLOCAL_LOG для деталей."
-        exit 1
-    fi
+    (/usr/local/bin/sslocal -b "127.0.0.1:60080" --protocol redir -s "[\$SERVER_IP]:\$SERVER_PORT" -k "\$SERVER_PASSWORD" -m chacha20-ietf-poly1305 --tcp-redir redirect --udp-redir tproxy &>>/var/log/sslocal.log &)
 }
 
 stop_sslocal() {
     echo "Останавливаю sslocal..."
-    pkill -x sslocal
-    sleep 1
-    if pgrep -x sslocal > /dev/null; then
-        echo "Не удалось остановить sslocal."
-    else
-        echo "sslocal остановлен."
-    fi
-}
-
-start_iproute2() {
-    echo "Настраиваю iproute2..."
-    ip rule add fwmark 0x2333 lookup 100 2>/dev/null
-    ip route add local default dev lo table 100 2>/dev/null
-}
-
-stop_iproute2() {
-    echo "Очищаю iproute2..."
-    ip rule del fwmark 0x2333 table 100 2>/dev/null
-    ip route del local default dev lo table 100 2>/dev/null
+    kill -9 $(pidof sslocal) &>/dev/null
 }
 
 start_iptables() {
     echo "Настраиваю iptables..."
+    iptables -t mangle -N SSREDIR 2>/dev/null
+    iptables -t mangle -F SSREDIR
+    iptables -t mangle -D OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -D PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR 2>/dev/null
+    iptables -t mangle -F SSREDIR
+    iptables -t mangle -X SSREDIR
+    iptables -t mangle -N SSREDIR
 
-    # Создаём и очищаем цепочки SSREDIR_TCP и SSREDIR_UDP в таблице mangle
-    iptables -t mangle -N SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -F SSREDIR_TCP
-
-    iptables -t mangle -N SSREDIR_UDP 2>/dev/null
-    iptables -t mangle -F SSREDIR_UDP
-
-    # Восстанавливаем метки соединений
-    iptables -t mangle -A SSREDIR_TCP -j CONNMARK --restore-mark
-    iptables -t mangle -A SSREDIR_UDP -j CONNMARK --restore-mark
-
-    # Исключаем сервер Shadowsocks из проксирования
-    iptables -t mangle -A SSREDIR_TCP -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
-    iptables -t mangle -A SSREDIR_UDP -p udp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
-
+    iptables -t mangle -A SSREDIR -j CONNMARK --restore-mark
+    iptables -t mangle -A SSREDIR -m mark --mark 0x2333 -j RETURN
+    # Исключаем сам Shadowsocks сервер
+    iptables -t mangle -A SSREDIR -p tcp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
+    iptables -t mangle -A SSREDIR -p udp -d \$SERVER_IP --dport \$SERVER_PORT -j RETURN
     # Исключаем локальный трафик
-    iptables -t mangle -A SSREDIR_TCP -d 127.0.0.0/8 -j RETURN
-    iptables -t mangle -A SSREDIR_UDP -d 127.0.0.0/8 -j RETURN
-
-    # Исключаем трафик SSH (порт 22)
-    iptables -t mangle -A SSREDIR_TCP -p tcp --dport 22 -j RETURN
-    iptables -t mangle -A SSREDIR_UDP -p udp --dport 22 -j RETURN
+    iptables -t mangle -A SSREDIR -d 127.0.0.0/8 -j RETURN
 
     if [ -n "\$CUSTOM_RULES" ]; then
-        # Пользовательские правила
         PROTO_PORTS=(\$CUSTOM_RULES)
         COUNT=\${#PROTO_PORTS[@]}
         i=0
@@ -175,86 +76,73 @@ start_iptables() {
             i=\$((i+2))
 
             if [ "\$PROTO" = "tcp" ]; then
-                iptables -t mangle -A SSREDIR_TCP -p tcp --dport \$PORT -j MARK --set-mark 0x2333
+                iptables -t mangle -A SSREDIR -p tcp --dport \$PORT -j MARK --set-mark 0x2333
             elif [ "\$PROTO" = "udp" ]; then
-                iptables -t mangle -A SSREDIR_UDP -p udp --dport \$PORT -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
+                iptables -t mangle -A SSREDIR -p udp --dport \$PORT -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
             fi
         done
     else
-        # Перенаправляем весь исходящий TCP и UDP трафик
-        iptables -t mangle -A SSREDIR_TCP -p tcp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
-        iptables -t mangle -A SSREDIR_UDP -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
+        # Старое поведение — перенаправляем весь TCP/UDP трафик
+        iptables -t mangle -A SSREDIR -p tcp --syn -j MARK --set-mark 0x2333
+        iptables -t mangle -A SSREDIR -p udp -m conntrack --ctstate NEW -j MARK --set-mark 0x2333
     fi
 
-    # Сохраняем метки соединений
-    iptables -t mangle -A SSREDIR_TCP -j CONNMARK --save-mark
-    iptables -t mangle -A SSREDIR_UDP -j CONNMARK --save-mark
+    iptables -t mangle -A SSREDIR -j CONNMARK --save-mark
 
-    # Применяем цепочки SSREDIR_TCP и SSREDIR_UDP только к OUTPUT цепочке (исходящему трафику)
-    iptables -t mangle -A OUTPUT -p tcp -j SSREDIR_TCP
-    iptables -t mangle -A OUTPUT -p udp -j SSREDIR_UDP
+    # Применяем правила для локального (OUTPUT) и не-локального (PREROUTING) трафика
+    iptables -t mangle -A OUTPUT -p tcp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A OUTPUT -p udp -m addrtype --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p tcp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
+    iptables -t mangle -A PREROUTING -p udp -m addrtype ! --src-type LOCAL ! --dst-type LOCAL -j SSREDIR
 
-    # Применяем REDIRECT для TCP-трафика
-    iptables -t mangle -A SSREDIR_TCP -p tcp -m mark --mark 0x2333 -j REDIRECT --to-ports 60080
-
-    # Применяем TPROXY для UDP-трафика
-    iptables -t mangle -A SSREDIR_UDP -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333/0x2333
+    # Применяем TPROXY
+    iptables -t mangle -A PREROUTING -p tcp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
+    iptables -t mangle -A PREROUTING -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080
 }
 
 stop_iptables() {
     echo "Очищаю iptables..."
-
-    # Удаление правил REDIRECT для TCP
-    iptables -t mangle -D OUTPUT -p tcp -j SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -D SSREDIR_TCP -p tcp -m mark --mark 0x2333 -j REDIRECT --to-ports 60080 2>/dev/null
-
-    # Удаление правил TPROXY для UDP
-    iptables -t mangle -D OUTPUT -p udp -j SSREDIR_UDP 2>/dev/null
-    iptables -t mangle -D SSREDIR_UDP -p udp -m mark --mark 0x2333 -j TPROXY --on-ip 127.0.0.1 --on-port 60080 --tproxy-mark 0x2333/0x2333 2>/dev/null
-
-    # Удаление цепочек SSREDIR_TCP и SSREDIR_UDP из OUTPUT
-    iptables -t mangle -D OUTPUT -p tcp -j SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -D OUTPUT -p udp -j SSREDIR_UDP 2>/dev/null
-
-    # Очистка и удаление цепочек SSREDIR_TCP и SSREDIR_UDP
-    iptables -t mangle -F SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -X SSREDIR_TCP 2>/dev/null
-    iptables -t mangle -F SSREDIR_UDP 2>/dev/null
-    iptables -t mangle -X SSREDIR_UDP 2>/dev/null
-
-    # Очистка таблицы mangle
-    iptables -t mangle -F 2>/dev/null
+    iptables -t mangle -F SSREDIR &>/dev/null
+    iptables -t mangle -X SSREDIR &>/dev/null
 }
 
 start_iproute2() {
     echo "Настраиваю iproute2..."
-    ip rule add fwmark 0x2333 lookup 100 2>/dev/null
     ip route add local default dev lo table 100 2>/dev/null
+    ip rule add fwmark 0x2333 table 100 2>/dev/null
 }
 
 stop_iproute2() {
     echo "Очищаю iproute2..."
-    ip rule del fwmark 0x2333 table 100 2>/dev/null
-    ip route del local default dev lo table 100 2>/dev/null
+    ip rule del table 100 &>/dev/null
+    ip route flush table 100 &>/dev/null
+}
+
+start_resolvconf() {
+    echo "Настраиваю resolv.conf..."
+    echo "nameserver 1.1.1.1" >/etc/resolv.conf
+}
+
+stop_resolvconf() {
+    echo "Восстанавливаю resolv.conf..."
+    echo "\$SYSTEM_DNS" > /etc/resolv.conf
 }
 
 start() {
     echo "Запуск процесса..."
-    start_resolvconf
     start_sslocal
-    start_iproute2
     start_iptables
+    start_iproute2
+    start_resolvconf
     echo "Процесс запущен."
-    # Чтобы скрипт не завершался, ожидаем завершения sslocal
-    wait
 }
 
 stop() {
     echo "Остановка процесса..."
-    stop_iptables
-    stop_iproute2
-    stop_sslocal
     stop_resolvconf
+    stop_iproute2
+    stop_iptables
+    stop_sslocal
     echo "Процесс остановлен."
 }
 
@@ -268,56 +156,47 @@ restart() {
 main() {
     echo "Переданы аргументы: \$@"
     if [ \$# -eq 0 ]; then
-        echo "Использование: \$0 {start|stop|restart}"
+        echo "usage: \$0 start|stop|restart ..."
         exit 1
     fi
 
-    case "\$1" in
-        start)
-            start
-            ;;
-        stop)
-            stop
-            ;;
-        restart)
-            restart
-            ;;
-        *)
-            echo "Использование: \$0 {start|stop|restart}"
+    for funcname in "\$@"; do
+        if declare -F "\$funcname" > /dev/null; then
+            echo "Выполняется функция: \$funcname"
+            \$funcname
+        else
+            echo "Ошибка: '\$funcname' не является shell-функцией"
             exit 1
-            ;;
-    esac
+        fi
+    done
 }
 
 main "\$@"
 EOF
 
 # Делаем скрипт исполняемым
-chmod +x /usr/local/bin/shadowsocks.sh
+sudo chmod +x /usr/local/bin/shadowsocks.sh
 
 # Создание systemd-сервиса
-echo "Создаю systemd-сервис shadowsocks.service..."
-tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
+sudo tee /etc/systemd/system/shadowsocks.service > /dev/null <<EOF
 [Unit]
-Description=Shadowsocks Rust Transparent Proxy
+Description=Shadowsocks-Rust Service
 After=network.target
 
 [Service]
 ExecStart=/usr/local/bin/shadowsocks.sh start
 ExecStop=/usr/local/bin/shadowsocks.sh stop
 Restart=on-failure
-Type=simple
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Активация и запуск сервиса
-echo "Активирую и запускаю сервис shadowsocks.service..."
-systemctl daemon-reload
-systemctl enable shadowsocks.service
-systemctl start shadowsocks.service
+# Активируем службу
+sudo systemctl daemon-reload
+sudo systemctl enable shadowsocks.service
+sudo systemctl start shadowsocks.service
 
-# Проверка статуса сервиса
-echo "Сервис shadowsocks.service запущен. Проверяю статус..."
-systemctl status shadowsocks.service
+# Проверка статуса
+sudo systemctl status shadowsocks.service
