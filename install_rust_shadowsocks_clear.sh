@@ -103,14 +103,14 @@ stop_sslocal() {
 
 start_iproute2() {
     echo "Настраиваю iproute2..."
-    ip rule add fwmark 0x1/0x1 lookup 100 2>/dev/null # Исправлено правило ip
-    ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null # Исправлено правило ip
+    sudo ip rule add fwmark 0x1/0x1 lookup 100 2>/dev/null # Исправленное правило
+    sudo ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null # Исправленное правило
 }
 
 stop_iproute2() {
     echo "Очищаю iproute2..."
-    ip rule del fwmark 0x1/0x1 lookup 100 2>/dev/null # Исправлено правило ip
-    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null # Исправлено правило ip
+    sudo ip rule del fwmark 0x1/0x1 lookup 100 2>/dev/null # Исправленное правило
+    sudo ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null # Исправленное правило
 }
 
 start_iptables() {
@@ -142,7 +142,7 @@ start_iptables() {
         sudo iptables -t mangle -A SSREDIR -p udp -j MARK --set-mark 0x1
     fi
 
-    sudo iptables -t nat -F
+    sudo iptables -t nat -F # Очищаем таблицу nat
     sudo iptables -t nat -A PREROUTING -m mark --mark 0x1 -j TPROXY --on-ip 127.0.0.1 --on-port \$SSLOCAL_PORT
 }
 
