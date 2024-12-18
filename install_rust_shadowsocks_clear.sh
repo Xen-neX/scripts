@@ -132,6 +132,7 @@ start() {
     echo "Запуск процесса..."
     start_sslocal
     start_iptables
+    iptables -t mangle -A OUTPUT -p udp --dport 53 -j MARK --set-mark 0x2333
     start_iproute2
     start_resolvconf
     echo "Процесс запущен."
