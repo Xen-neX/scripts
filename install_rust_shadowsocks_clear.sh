@@ -27,7 +27,7 @@ cat > /etc/shadowsocks-rust/config.json << EOF
 {
     "server": "158.255.214.188",
     "server_port": 443,
-    "password": "RP3vtbRmc6JTLXyFwLR2dm",
+    "password": "",
     "method": "chacha20-ietf-poly1305",
     "local_address": "0.0.0.0",
     "local_port": 1082,
