@@ -88,7 +88,6 @@ start_sslocal() {
         -m "chacha20-ietf-poly1305" \\
         --tcp-redir "redirect" \\
         --udp-redir "tproxy" \\
-        --mptcp \\
         &> "\$SSLOCAL_LOG" &
 
     SSLOCAL_PID=\$!
